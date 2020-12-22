@@ -1,0 +1,4 @@
+*.cm*
+*.exe
+_build/
+.merlin
