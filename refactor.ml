@@ -1,5 +1,6 @@
 
 let () =
+  (* this should point to an ocaml installation lib directory *)
   Load_path.init ["../mlfi/mlfi-ins/lib"]
 
 let () = Clflags.strict_deps := false
@@ -46,7 +47,7 @@ module RefactorFloatArray = struct
 
   let get_loc texp = (texp.exp_loc.loc_start.pos_cnum, texp.exp_loc.loc_end.pos_cnum)
 
-  let pos_in (s1,e1) (s2,e2) = s2 <= s1 && e1 <= e2
+  let loc_in (s1,e1) (s2,e2) = s2 <= s1 && e1 <= e2
 
   exception ReturnOk
 
@@ -146,55 +147,7 @@ module RefactorFloatArray = struct
 
   exception Stop
 
-  let put_par_on_child child_exp = match child_exp.exp_desc with
-    | Texp_constant (Asttypes.Const_float f) when f.[0] = '-' -> true (* negative number *)
-    | Texp_ident _
-    | Texp_array _
-    | Texp_constant _ -> false
-    | _ -> true
-
-  let put_par : bool ref = ref false
-
-  let handle_par_expr sub texp =
-    let extra = function
-      | Texp_constraint cty -> sub.typ sub cty
-      | Texp_coerce (cty1, cty2) ->
-        Option.iter (sub.typ sub) cty1;
-        sub.typ sub cty2
-      | Texp_newtype _ -> ()
-      | Texp_poly cto -> Option.iter (sub.typ sub) cto
-    in
-    List.iter (fun (e, _, _) -> extra e) texp.exp_extra;
-    sub.env sub texp.exp_env;
-    match texp.exp_desc with
-    | Texp_apply (
-        {
-          exp_desc = Texp_ident (
-              Path.Pdot (_, ("+."|"-."|"*."|"/."|"**"|"="|"<>"|"<"|">"|"<="|">="|"=="|"!=")), _, _
-            ); exp_loc=op_loc; _
-        }, [(_, Some arg1); (_, Some arg2)]) ->
-      let op_loc = op_loc.loc_start.pos_cnum in
-      let par = !put_par in
-      put_par :=
-        not (arg1.exp_loc.loc_start.pos_cnum < op_loc && op_loc < arg2.exp_loc.loc_start.pos_cnum);
-      sub.expr sub arg1;
-      sub.expr sub arg2;
-      put_par := par
-    | Texp_apply (exp, list) ->
-      let par = !put_par in
-      put_par := false;
-      sub.expr sub exp;
-      put_par := true;
-      List.iter (fun (_, o) -> Option.iter (sub.expr sub) o) list;
-      put_par := par
-    | Texp_construct (_, _, args) ->
-      let par = !put_par in
-      if List.length args = 1 then put_par := true;
-      List.iter (sub.expr sub) args;
-      put_par := par
-    | _ -> default_iterator.expr sub texp
-
-  let default_iterator = { default_iterator with expr = handle_par_expr }
+  let default_iterator = Par.iterator
 
   let rec expr patches file_log iter texp =
     begin match fetch_attr_loc "ignore" texp.exp_attributes with
@@ -215,13 +168,13 @@ module RefactorFloatArray = struct
                 mk_rewrite_patch ~loc s |> add_to patches
               | _ -> ()
             );
-            expr_no_attr patches file_log iter texp !put_par
-          | None -> expr_no_attr patches file_log iter texp !put_par
+            expr_no_attr patches file_log iter texp 
+          | None -> expr_no_attr patches file_log iter texp
         end
     end
 
-
-  and expr_no_attr patches file_log iter texp par : unit =
+  and expr_no_attr patches file_log iter texp : unit =
+    let par = Par.put () in
     match texp.exp_desc with
     | Texp_function {cases={c_lhs; _}::_;_} ->
       List.fold_left
@@ -240,7 +193,7 @@ module RefactorFloatArray = struct
           let elt_patch = ref [] in
           let iter = find_float_iterator elt_patch file_log in
           iter.expr iter elt_t;
-          mk_seq_patch ~loc:(get_loc elt_t) ~par:(put_par_on_child elt_t) !elt_patch
+          mk_seq_patch ~loc:(get_loc elt_t) ~par:(Par.put_on_child elt_t) !elt_patch
         ) l in
       mk_array_constr_patch ~loc:(get_loc texp) ~par elt_patches |> add_to patches
     (* TODO : adapt code
@@ -272,39 +225,39 @@ module RefactorFloatArray = struct
           with Stop -> ()
         )
     (* Case where we inspect polymorphic uses of 'a array as float array : only fills the log *)
-  (*
-  | Texp_apply
-      ({exp_desc=Texp_ident (p, _, {val_type; _});
-                                         exp_env=env; _}, args) ->
-                                         let ret_typ = List.fold_left (fun f_typ (label,arg_exp) ->
-                                         match arg_exp with
-                                         | None -> f_typ
-                                         | Some arg_exp ->
-                                         let generic_arg_typ, f_typ = get_arg_typ label f_typ in
-                                         let instance_arg_typ = arg_exp.exp_type in
-                                         Option.iter (fun generic_arg_typ ->
-                                         if poly_array_replaced_by_float_array env generic_arg_typ instance_arg_typ then
-                                         let pos = arg_exp.exp_loc.loc_start.pos_lnum in
-                                         file_log := (print_path p, pos) :: !file_log
-                                         ) generic_arg_typ;
-                                         f_typ
-                                         ) val_type args
-                                         in
-                                         let _ = List.fold_left (fun f_typ (label,arg_typ) ->
-                                         let gen_arg_typ, f_typ = get_arg_typ label f_typ in
-                                         let gen_arg_typ = Option.value ~default:f_typ gen_arg_typ in
-                                         if poly_array_replaced_by_float_array env gen_arg_typ arg_typ then
-                                         let pos = texp.exp_loc.loc_start.pos_lnum in
-                                         file_log := (print_path p, pos) :: !file_log
-                                         else ();
-                                         f_typ
-                                         ) ret_typ (split_arrow_typ texp.exp_type)
-                                         in
-                                         default_iterator.expr iter texp
+    (*
+    | Texp_apply
+        ({exp_desc=Texp_ident (p, _, {val_type; _});
+                                       exp_env=env; _}, args) ->
+                                       let ret_typ = List.fold_left (fun f_typ (label,arg_exp) ->
+                                       match arg_exp with
+                                       | None -> f_typ
+                                       | Some arg_exp ->
+                                       let generic_arg_typ, f_typ = get_arg_typ label f_typ in
+                                       let instance_arg_typ = arg_exp.exp_type in
+                                       Option.iter (fun generic_arg_typ ->
+                                       if poly_array_replaced_by_float_array env generic_arg_typ instance_arg_typ then
+                                       let pos = arg_exp.exp_loc.loc_start.pos_lnum in
+                                       file_log := (print_path p, pos) :: !file_log
+                                       ) generic_arg_typ;
+                                       f_typ
+                                       ) val_type args
+                                       in
+                                       let _ = List.fold_left (fun f_typ (label,arg_typ) ->
+                                       let gen_arg_typ, f_typ = get_arg_typ label f_typ in
+                                       let gen_arg_typ = Option.value ~default:f_typ gen_arg_typ in
+                                       if poly_array_replaced_by_float_array env gen_arg_typ arg_typ then
+                                       let pos = texp.exp_loc.loc_start.pos_lnum in
+                                       file_log := (print_path p, pos) :: !file_log
+                                       else ();
+                                       f_typ
+                                       ) ret_typ (split_arrow_typ texp.exp_type)
+                                       in
+                                       default_iterator.expr iter texp
                                      *)
     | _ -> default_iterator.expr iter texp
 
-  and typ patches _file_log iter ctyp =
+  and typ patches iter ctyp =
     match fetch_attr_loc "tmp_annot_ret" ctyp.ctyp_attributes with
     | Some attr_loc ->
       let loc = (attr_loc.loc_end.pos_cnum + 2, ctyp.ctyp_loc.loc_start.pos_cnum - 4) in
@@ -326,8 +279,12 @@ module RefactorFloatArray = struct
           end
       end
 
-  and find_float_iterator patches log =
-    { default_iterator with value_binding = value_binding patches log; expr = expr patches log; typ = typ patches log }
+  and find_float_iterator patches log = { 
+    default_iterator with 
+    value_binding = value_binding patches log;
+    expr = expr patches log;
+    typ = typ patches
+  }
 
   let rec get_structure_of_mod_expr me = match me.mod_desc with
     | Tmod_structure s -> s
