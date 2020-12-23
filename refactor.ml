@@ -35,182 +35,15 @@ module Log = struct
   let write file = write file (Buffer.contents log)
 end
 
-module TypUtils = struct
-  (* Type related code *)
-  open Typedtree
-
-  let rec print_path p =
-    let open Path in
-    match p with
-    | Pident id -> Ident.name id
-    | Pdot (p,s) ->
-      let s' = print_path p in
-      if s' = "Stdlib" then s else Printf.sprintf "%s.%s" s' s
-    | _ -> ""
-
-  let typ_var_n = ref 0
-
-  let typ_of_string s =
-    let ctype = Parse.core_type (Lexing.from_string s) in
-    let env = Compmisc.initial_env () in
-    try (Typetexp.transl_type_scheme env ctype).ctyp_type
-    with Env.Error e -> Env.report_error Format.std_formatter e; failwith "Failed to parse type"
-
-  let ctyp_path_of_string s =
-    let ctype = Parse.core_type (Lexing.from_string s) in
-    let env = Compmisc.initial_env () in
-    try (
-      match (Typetexp.transl_type_scheme env ctype).ctyp_desc with
-      | Ttyp_constr (path, _, _) -> path
-      | _ -> failwith "."
-    ) with Env.Error e -> Env.report_error Format.std_formatter e; failwith "."
-
-  let float_typ : Types.type_expr = typ_of_string "float"
-
-  let float_array_typ : Types.type_expr = typ_of_string "float array"
-
-  let float_array_array_typ : Types.type_expr = typ_of_string "float array array"
-
-  let alpha_array_typ : Types.type_expr = typ_of_string "'a array"
-
-  let floatarray_typ : Types.type_expr = typ_of_string "floatarray"
-
-  let float_path : Path.t = ctyp_path_of_string "float"
-
-  let array_path : Path.t = ctyp_path_of_string "'a array"
-
-  let rec rewrite_typ_var t =
-    let open Types in
-    let desc = match t.desc with
-      | Tvar _ -> let s = string_of_int !typ_var_n in incr typ_var_n; Tvar (Some ("_" ^ s))
-      | Tarrow (l,t1,t2,c) -> Tarrow (l,rewrite_typ_var t1, rewrite_typ_var t2, c)
-      | Ttuple ts -> Ttuple (List.map rewrite_typ_var ts)
-      | Tconstr (p, ts, m) -> Tconstr (p, List.map rewrite_typ_var ts, m)
-      | Tlink t -> (rewrite_typ_var t).desc
-      | _ -> t.desc
-    in
-    { t with desc }
-
-  let uni_trace_contains_escape =
-    List.exists
-      (fun x -> match x with Ctype.Unification_trace.Escape _ -> true | _ -> false)
-
-  let moregeneral env t_ref t_to_test =
-    try
-      Ctype.moregeneral env false t_ref t_to_test ||
-      (
-        try
-          let t_to_test = t_to_test |> Ctype.instance |> rewrite_typ_var in
-          Ctype.unify env t_ref t_to_test;
-          false
-        with Ctype.Unify trace ->
-          if uni_trace_contains_escape trace then
-            let env =
-              try Env.env_of_only_summary Envaux.env_from_summary env
-              with Envaux.Error _ -> env
-            in Ctype.moregeneral env false t_ref t_to_test
-          else false
-      )
-    with Assert_failure _ -> false
-
-  let moregeneral_expand_env env t_ref t_to_test =
-    try
-      let env =
-        try Env.env_of_only_summary Envaux.env_from_summary env
-        with Envaux.Error _ -> env
-      in Ctype.moregeneral env false t_ref t_to_test
-    with Assert_failure _ -> false
-
-  let moregeneral_no_env_expansion env t_ref t_to_test =
-    try Ctype.moregeneral env false t_ref t_to_test
-    with Assert_failure _ -> false
-
-  let typ_matches_float texp = moregeneral texp.exp_env float_typ texp.exp_type
-
-  let typ_matches_float_array texp = moregeneral texp.exp_env float_array_typ texp.exp_type
-
-  let typ_matches_float_array_array texp = moregeneral texp.exp_env float_array_array_typ texp.exp_type
-
-  let rec get_res_typ t = match t.Types.desc with
-    | Tarrow (_, _, t, _) | Tlink t -> get_res_typ t
-    | _ -> t
-
-  let rec split_arrow_typ t = match t.Types.desc with
-    | Tlink t -> split_arrow_typ t
-    | Tarrow (l, t_arg, t_ret, _) -> (l, t_arg) :: (split_arrow_typ t_ret)
-    | _ -> [Nolabel, t] (* true return type *)
-
-  let rec get_arg_and_ret t = match t.Types.desc with
-    | Tlink t -> get_arg_and_ret t
-    | Tarrow (_, t_arg, t_ret, _) -> (t_arg, t_ret)
-    | _ -> invalid_arg ""
-
-  (* Get the argument type with label [label], or the first argument type without
-     label if NoLabel, and returns the function type without the retrieved type *)
-  let rec get_arg_typ label t =
-    let open Types in match t.desc with
-    | Tlink t -> get_arg_typ label t
-    | Tarrow (Nolabel,t_arg,t_ret,_) -> Some t_arg, t_ret
-    | Tarrow (l,t_arg,t_ret,x) ->
-      if l = label then
-        Some t_arg, t_ret
-      else
-        let res, modified_typ = get_arg_typ label t_ret in
-        res, {t with desc = Tarrow (l,t_arg,modified_typ,x)}
-    | _ -> None, t
-
-  let rec remove_links t = match t.Types.desc with
-    | Tlink t -> remove_links t
-    | _ -> t
-
-  (* Check if 'a array is used with float array somewhere in a given type :
-     t2 is supposed to be an instance of t1 *)
-  let rec poly_array_replaced_by_float_array env t1 t2 =
-    let check =
-      moregeneral_no_env_expansion env alpha_array_typ t1 &&
-      moregeneral_no_env_expansion env t1 alpha_array_typ &&
-      moregeneral_no_env_expansion env float_array_typ t2
-    in
-    check ||
-    (
-      let t1,t2 = remove_links t1, remove_links t2 in
-      match t1.desc, t2.desc with
-      | Tarrow (_,t_arg1,t_ret1,_), Tarrow (_,t_arg2,t_ret2,_) ->
-        poly_array_replaced_by_float_array env t_arg1 t_arg2 ||
-        poly_array_replaced_by_float_array env t_ret1 t_ret2
-      | Tconstr (p1,ts1,_), Tconstr (p2,ts2,_) when p1 = p2 && List.length ts1 = List.length ts2 ->
-        List.combine ts1 ts2 |>
-        List.exists (fun (t,t') -> poly_array_replaced_by_float_array env t t')
-      | Ttuple ts1, Ttuple ts2 when List.length ts1 = List.length ts2 ->
-        List.combine ts1 ts2 |>
-        List.exists (fun (t,t') -> poly_array_replaced_by_float_array env t t')
-      | _ -> false
-    )
-
-
-  let rec rewrite ~env ~grep ~replace t =
-    if moregeneral env grep t then replace
-    else
-      let rewrite = rewrite ~env ~grep ~replace in
-      let desc = match t.desc with
-        | Tlink t -> (rewrite t).Types.desc
-        | Tarrow (l, arg, ret, x) -> Tarrow (l, rewrite arg, rewrite ret, x)
-        | Ttuple ts -> Ttuple (List.map rewrite ts)
-        | Tconstr (p,ts,x) -> Tconstr (p, List.map rewrite ts, x)
-        | _ -> t.desc
-      in { t with desc }
-end
-
 module RefactorFloatArray = struct
   open Typedtree
   open Tast_iterator
   open Patch
-  open TypUtils
+  open Typ_utils
   open Location
 
   let add_to (l : 'a list ref) (elt : 'a) = l := elt :: !l
 
-  (* Working with positions *)
   let get_loc texp = (texp.exp_loc.loc_start.pos_cnum, texp.exp_loc.loc_end.pos_cnum)
 
   let pos_in (s1,e1) (s2,e2) = s2 <= s1 && e1 <= e2
@@ -219,7 +52,7 @@ module RefactorFloatArray = struct
 
   let pat_contains_float_array p =
     let pat iter p = match p.pat_desc with
-      | Tpat_array _ when moregeneral p.pat_env float_array_typ p.pat_type ->
+      | Tpat_array _ when moregeneral p.pat_env (parse_typ "float array") p.pat_type ->
         raise ReturnOk
       | _ -> default_iterator.pat iter p
     in
@@ -257,6 +90,61 @@ module RefactorFloatArray = struct
     | x :: xx ->
       let pp, not_pp = filter_split p xx in
       if p x then x :: pp, not_pp else pp, x :: not_pp
+
+  type action = Patch of string | Log
+
+  let fun_tbl = Hashtbl.create 30
+  let () = List.iter (fun (key,value) -> Hashtbl.add fun_tbl key value)
+      [
+        ("Array.length", [("float array -> _", Patch "Float.Array.length")]);
+        ("Array.get", [("float array -> _", Patch "Float.Array.get")]); 
+        ("Array.set", [("float array -> _", Patch "Float.Array.set")]);
+        ("Array.make", [("_ -> float -> _", Patch "Float.Array.make")]);
+        ("Array.create", [("_ -> float -> _", Patch "Float.Array.create")]);
+        ("Array.create_float", [("_", Patch "Float.Array.create")]);
+        ("Array.make_float", [("_", Patch "Float.Array.create")]);
+        ("Array.init", [("_ -> (_ -> float) -> _", Patch "Float.Array.init")]);
+        ("Array.make_matrix", [("_ -> _ -> float -> _", Patch "Floatarray.make_matrix")]);
+        ("Array.create_matrix", [("_ -> _ -> float -> _", Patch "Floatarray.make_matrix")]);
+        ("Array.append", [("float array -> _", Patch "Float.Array.append")]);
+        ("Array.concat", [("float array list -> _", Patch "Float.Array.concat")]);
+        ("Array.sub", [("float array -> _", Patch "Float.Array.sub")]);
+        ("Array.copy", [("float array -> _", Patch "Float.Array.copy")]);
+        ("Array.fill", [("float array -> _", Patch "Float.Array.fill")]);
+        ("Array.blit", [("float array -> _", Patch "Float.Array.blit")]);
+        ("Array.to_list", [("float array -> _", Patch "Float.Array.to_list")]);
+        ("Array.of_list", [("float list -> _", Patch "Float.Array.of_list")]);
+        ("Array.iter", [("(float -> _) -> _", Patch "Float.Array.iter")]);
+        ("Array.iteri", [("(_ -> float -> _) -> _", Patch "Float.Array.iteri")]);
+        ("Array.map", [("(float -> float) -> _", Patch "Float.Array.map");
+                       ("(float -> _) -> _", Patch "Float.Array.map_to_array");
+                       ("(_ -> float) -> _", Patch "Float.Array.map_from_array")]);
+        ("Array.mapi", [("(int -> float -> float) -> _", Patch "Float.Array.mapi");
+                        ("(int -> float -> _) -> _", Patch "Floatarray.mapi_to_array");
+                        ("(int -> _ -> float) -> _", Patch "Floatarray.mapi_from_array")]);
+        ("Array.fold_left", [("(_ -> float -> _) -> _", Patch "Float.Array.fold_left")]);
+        ("Array.fold_right", [("(float -> _ -> _) -> _", Patch "Float.Array.fold_right")]);
+        ("Array.iter2", [("(float -> float -> _) -> _", Patch "Float.Array.iter2");
+                         ("(float -> _ -> _) -> _", Log);
+                         ("(_ -> float -> _) -> _", Log)]);
+        ("Array.map2", [("(float -> float -> float) -> _", Patch "Float.Array.map2");
+                        ("(float -> _ -> _) -> _", Log);
+                        ("(_ -> float -> _) -> _", Log);
+                        ("(_ -> _ -> float) -> _", Log)]);
+        ("Array.for_all", [("(float -> _) -> _", Patch "Float.Array.for_all")]);
+        ("Array.exists", [("(float -> _) -> _", Patch "Float.Array.exists")]);
+        ("Array.mem", [("float -> _", Patch "Float.Array.mem")]);
+        ("Array.memq", [("float -> _", Patch "Float.Array.memieee")]); (* ??? *)
+        ("Array.sort", [("(float -> float -> _) -> _", Patch "Float.Array.sort")]);
+        ("Array.stable_sort", [("(float -> float -> _) -> _", Patch "Float.Array.stable_sort")]);
+        ("Array.to_seq", [("float array -> _", Patch "Float.Array.to_seq")]);
+        ("Array.to_seqi", [("float array -> _", Patch "Float.Array.to_seqi")]);
+        ("Array.of_seq", [("_ -> float array", Patch "Float.Array.of_seq")]);
+        ("Array.unsafe_get", [("float array -> _", Patch "Float.Array.unsafe_get")]);
+        ("Array.unsafe_set", [("float array -> _", Patch "Float.Array.unsafe_set")]);
+      ]
+
+  exception Stop
 
   let put_par_on_child child_exp = match child_exp.exp_desc with
     | Texp_constant (Asttypes.Const_float f) when f.[0] = '-' -> true (* negative number *)
@@ -332,6 +220,7 @@ module RefactorFloatArray = struct
         end
     end
 
+
   and expr_no_attr patches file_log iter texp par : unit =
     match texp.exp_desc with
     | Texp_function {cases={c_lhs; _}::_;_} ->
@@ -346,7 +235,7 @@ module RefactorFloatArray = struct
           mk_remove_patch ~loc:(id_end, rpar+1) |> add_to patches
         );
       default_iterator.expr iter texp
-    | Texp_array l when moregeneral_expand_env texp.exp_env float_array_typ texp.exp_type ->
+    | Texp_array l when moregeneral_expand_env texp.exp_env (parse_typ "float array") texp.exp_type ->
       let elt_patches = List.map (fun elt_t ->
           let elt_patch = ref [] in
           let iter = find_float_iterator elt_patch file_log in
@@ -361,21 +250,6 @@ module RefactorFloatArray = struct
           _},
          [(_, Some arr_exp); (_, Some i_exp)]) ->
     *)
-    | Texp_apply
-        ({exp_desc=Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "get"), _, _);
-          exp_loc={loc_ghost=false;_};
-          _} as f_exp, (_, Some arr_exp) :: _) ->
-      if typ_matches_float_array arr_exp then
-        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.get" |> add_to patches;
-      default_iterator.expr iter texp
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "unsafe_get"), _, _);
-          _} as f_exp,
-         [(_, Some arr_exp); _]) ->
-      if typ_matches_float_array arr_exp then
-        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.unsafe_get" |> add_to patches;
-      default_iterator.expr iter texp
     (* TODO : adapt code
        | Texp_apply
         ({exp_desc=Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "set"), _, _);
@@ -384,189 +258,50 @@ module RefactorFloatArray = struct
          [(_, Some arr_exp); (_, Some i_exp); (_, Some v_exp)])
        when typ_matches_float_array arr_exp ->
     *)
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "unsafe_set"), _, _);
-          _} as f_exp,
-         [(_, Some arr_exp); _; _]) ->
-      if typ_matches_float_array arr_exp then
-        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.unsafe_set" |> add_to patches;
-      default_iterator.expr iter texp
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "map"), _, _);
-          _} as f_exp,
-         (_, Some f) :: _) ->
-      begin try
-          let f_arg_t, f_ret_t = get_arg_and_ret f.exp_type in
-          let is_float_arg = moregeneral f.exp_env float_typ f_arg_t in
-          let is_float_ret = moregeneral f.exp_env float_typ f_ret_t in
-          let fun_name =
-            if is_float_arg && is_float_ret then "Float.Array.map"
-            else if is_float_arg then "Float.Array.map_to_array"
-            else if is_float_ret then "Float.Array.map_from_array"
-            else ""
-          in
-          if fun_name <> "" then
-            mk_rewrite_patch ~loc:(get_loc f_exp) fun_name |> add_to patches
-        with Invalid_argument _ -> ()
-      end;
-      default_iterator.expr iter texp
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "mapi"), _, _);
-          _} as f_exp,
-         [ _; (_, Some arr_exp)]) ->
-      let arr_typ_match = typ_matches_float_array arr_exp in
-      let exp_typ_match = typ_matches_float_array texp in
-      let fun_name =
-        if arr_typ_match && exp_typ_match then "Float.Array.mapi"
-        else if arr_typ_match then "Floatarray.mapi_to_array"
-        else if exp_typ_match then "Floatarray.mapi_from_array"
-        else ""
-      in
-      if fun_name <> "" then
-        mk_rewrite_patch ~loc:(get_loc f_exp) fun_name |> add_to patches;
-      default_iterator.expr iter texp
-    (* TODO : adapt_code
-       | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "map2"), _, _);
-          _} as f_exp,
-         [ _; (_, Some arr1_exp); (_, Some arr2_exp)]) ->
-    *)
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "make_matrix"), _, _);
-          _},
-         [ _; _ ; (_, Some v_exp)])
-      when typ_matches_float v_exp ->
-      mk_rewrite_patch ~loc:(get_loc texp) "Floatarray.make_matrix" |> add_to patches;
-      default_iterator.expr iter texp
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "iteri"), _, _);
-          _} as f_exp,
-         (_, Some f) :: _) ->
-      begin try
-          let _, t_aux = get_arg_and_ret f.exp_type in
-          let arg, _ = get_arg_and_ret t_aux in
-          if moregeneral f.exp_env float_typ arg then
-            mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.iteri" |> add_to patches
-        with Assert_failure _ -> () end;
-      default_iterator.expr iter texp
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "iter2"), _, _);
-          _} as f_exp,
-         (_, Some f) :: _) ->
-      begin try
-          let arg1, t_aux = get_arg_and_ret f.exp_type in
-          let arg2, _ = get_arg_and_ret t_aux in
-          let is_float_arg1 = moregeneral f.exp_env float_typ arg1 in
-          let is_float_arg2 = moregeneral f.exp_env float_typ arg2 in
-          if is_float_arg1 && is_float_arg2 then
-            mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.iter2" |> add_to patches
-          else if is_float_arg1 || is_float_arg2 then
-            file_log := ("iter2", f_exp.exp_loc.loc_start.pos_lnum) :: !file_log
-          else
-            ()
-        with Assert_failure _ -> () end;
-      default_iterator.expr iter texp
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "make"), _, _);
-          _} as f_exp,
-         [ _; (_, Some v_exp)]) ->
-      if typ_matches_float v_exp then
-        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.make" |> add_to patches;
-      default_iterator.expr iter texp
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "fill"), _, _);
-          _} as f_exp,
-         (_,Some arr_exp) :: _) ->
-      if typ_matches_float_array arr_exp then
-        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.fill" |> add_to patches;
-      default_iterator.expr iter texp
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "fold_left"), _, _);
-          _} as f_exp,
-         [_; _; (_, Some arr_exp)]) ->
-      if typ_matches_float_array arr_exp then
-        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.fold_left" |> add_to patches;
-      default_iterator.expr iter texp
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "fold_right"), _, _);
-          _} as f_exp,
-         [_; (_, Some arr_exp); _]) ->
-      if typ_matches_float_array arr_exp then
-        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.fold_right" |> add_to patches;
-      default_iterator.expr iter texp
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "mem"), _, _);
-          _} as f_exp,
-         [_; (_, Some arr_exp)]) ->
-      if typ_matches_float_array arr_exp then
-        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.mem" |> add_to patches;
-      default_iterator.expr iter texp
-    | Texp_ident (Path.Pdot (
-        Path.Pdot (_, "Array"),
-        ("of_list"|"to_list"|"create_float"|"copy"|"concat"|"init"|"length"|"get"|"set"|"unsafe_get"|"unsafe_set" as fun_name)) , _, _)
-      when texp.exp_loc.loc_ghost = false ->
-      let arg_ts = split_arrow_typ texp.exp_type |> List.map snd in
-      if List.exists (moregeneral texp.exp_env float_array_typ) arg_ts &&
-         List.for_all (fun t -> not (moregeneral texp.exp_env float_array_array_typ t)) arg_ts
-      then
-        let fun_name = if fun_name = "create_float" then "create" else fun_name in
-        mk_rewrite_patch ~loc:(get_loc texp) ("Float.Array." ^ fun_name) |> add_to patches
-    | Texp_apply
-        ({exp_desc=
-            Texp_ident (Path.Pdot (
-                Path.Pdot
-                  (_, "Array"),
-                ("length"|"create"|"make_float"|"init"|"append"
-                |"concat"|"sub"|"copy"|"blit"|"to_list"|"of_list"|"iter"|"iteri"
-                |"for_all"|"exists"|"sort"|"stable_sort"|"fast_sort"|"to_seq"
-                |"to_seqi"|"of_seq" as fun_name)
-              ), _, _);
-          _} as f_exp, args)
-      when List.exists (fun (_,x) -> Option.fold ~none:false ~some:typ_matches_float_array x) args
-        || typ_matches_float_array texp ->
-      mk_rewrite_patch ~loc:(get_loc f_exp) ("Float.Array." ^ fun_name) |> add_to patches;
-      default_iterator.expr iter texp
+    | Texp_ident (path, _, _) ->
+      Hashtbl.find_opt fun_tbl (print_path path)
+      |> Option.iter (fun l ->
+          try List.iter (fun (t_str, action) ->
+              if exp_type_match texp t_str then (
+                (match action with 
+                 | Patch s -> mk_rewrite_patch ~loc:(get_loc texp) s |> add_to patches
+                 | Log -> file_log := (print_path path, texp.exp_loc.loc_start.pos_lnum) :: !file_log);
+                raise Stop
+              )
+            ) l
+          with Stop -> ()
+        )
     (* Case where we inspect polymorphic uses of 'a array as float array : only fills the log *)
-    | Texp_apply
-        ({exp_desc=Texp_ident (p, _, {val_type; _});
-          exp_env=env; _}, args) ->
-      let ret_typ = List.fold_left (fun f_typ (label,arg_exp) ->
-          match arg_exp with
-          | None -> f_typ
-          | Some arg_exp ->
-            let generic_arg_typ, f_typ = get_arg_typ label f_typ in
-            let instance_arg_typ = arg_exp.exp_type in
-            Option.iter (fun generic_arg_typ ->
-                if poly_array_replaced_by_float_array env generic_arg_typ instance_arg_typ then
-                  let pos = arg_exp.exp_loc.loc_start.pos_lnum in
-                  file_log := (print_path p, pos) :: !file_log
-              ) generic_arg_typ;
-            f_typ
-        ) val_type args
-      in
-      let _ = List.fold_left (fun f_typ (label,arg_typ) ->
-          let gen_arg_typ, f_typ = get_arg_typ label f_typ in
-          let gen_arg_typ = Option.value ~default:f_typ gen_arg_typ in
-          if poly_array_replaced_by_float_array env gen_arg_typ arg_typ then
-            let pos = texp.exp_loc.loc_start.pos_lnum in
-            file_log := (print_path p, pos) :: !file_log
-          else ();
-          f_typ
-        ) ret_typ (split_arrow_typ texp.exp_type)
-      in
-      default_iterator.expr iter texp
+  (*
+  | Texp_apply
+      ({exp_desc=Texp_ident (p, _, {val_type; _});
+                                         exp_env=env; _}, args) ->
+                                         let ret_typ = List.fold_left (fun f_typ (label,arg_exp) ->
+                                         match arg_exp with
+                                         | None -> f_typ
+                                         | Some arg_exp ->
+                                         let generic_arg_typ, f_typ = get_arg_typ label f_typ in
+                                         let instance_arg_typ = arg_exp.exp_type in
+                                         Option.iter (fun generic_arg_typ ->
+                                         if poly_array_replaced_by_float_array env generic_arg_typ instance_arg_typ then
+                                         let pos = arg_exp.exp_loc.loc_start.pos_lnum in
+                                         file_log := (print_path p, pos) :: !file_log
+                                         ) generic_arg_typ;
+                                         f_typ
+                                         ) val_type args
+                                         in
+                                         let _ = List.fold_left (fun f_typ (label,arg_typ) ->
+                                         let gen_arg_typ, f_typ = get_arg_typ label f_typ in
+                                         let gen_arg_typ = Option.value ~default:f_typ gen_arg_typ in
+                                         if poly_array_replaced_by_float_array env gen_arg_typ arg_typ then
+                                         let pos = texp.exp_loc.loc_start.pos_lnum in
+                                         file_log := (print_path p, pos) :: !file_log
+                                         else ();
+                                         f_typ
+                                         ) ret_typ (split_arrow_typ texp.exp_type)
+                                         in
+                                         default_iterator.expr iter texp
+                                     *)
     | _ -> default_iterator.expr iter texp
 
   and typ patches _file_log iter ctyp =
@@ -583,7 +318,7 @@ module RefactorFloatArray = struct
           begin match ctyp.ctyp_desc with
             | Ttyp_constr (array_p, _,
                            [ {ctyp_desc=Ttyp_constr (float_p, _, []); _} ])
-              when array_p = array_path && float_p = float_path ->
+              when array_p = ctyp_path_of_string "'a array" && float_p = ctyp_path_of_string "float" ->
               let loc = ctyp.ctyp_loc.loc_start.pos_cnum, ctyp.ctyp_loc.loc_end.pos_cnum in
               if loc <> (-1,-1) then
                 mk_rewrite_patch ~loc "floatarray" |> add_to patches
