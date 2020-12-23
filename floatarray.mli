@@ -1,6 +1,6 @@
 val to_array : floatarray -> float array
 val from_array : float array -> floatarray
-val empty : floatarray
+val empty : unit -> floatarray
 
 val make1 : float -> floatarray
 val make2 : float -> float -> floatarray

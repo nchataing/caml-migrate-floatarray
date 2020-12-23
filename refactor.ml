@@ -35,119 +35,6 @@ module Log = struct
   let write file = write file (Buffer.contents log)
 end
 
-module Patch = struct
-
-  type patch = (int * int) * patch_kind * bool
-
-  and patch_kind =
-    | NoPatch
-    | PatchList of patch list (* patches in this list should not overlap *)
-    | Rewrite of string
-    | Get of patch * patch
-    | Set of patch * patch * patch
-    | ArrayConstructor of patch list
-
-  let make_named_patch loc txt = (loc,txt,false)
-
-  let rec remove_dupl = function
-    | [] | [_] as xx -> xx
-    | (((xs,xe),_,_) as x) :: (((ys,ye),_,_) :: xx as yy) ->
-      if xs <= ys && ye <= xe then
-        (* we remove y *)
-        remove_dupl (x :: xx)
-      else if ys <= xs && xe <= ye then
-        (* we remove x *)
-        remove_dupl yy
-      else
-        x :: remove_dupl yy
-
-  let par_start_end_match s =
-    let n = String.length s in
-    s.[0] = '(' && s.[n-1] = ')' &&
-    (
-      let par_count = ref 0 in
-      let res = ref true in
-      for i = 1 to String.length s - 2 do
-        if s.[i] = '(' then incr par_count
-        else if s.[i] = ')' then decr par_count;
-        if !par_count = -1 then res := false
-      done;
-      !res
-    )
-
-  let rec patch_to_str txt ((s,e),kind,par) =
-    let par = ref par in
-    let patch_to_str = patch_to_str txt in
-    let str = match kind with
-      | NoPatch -> String.sub txt s (e - s)
-      | PatchList ps ->
-        let ps = List.sort (fun ((s1,_),_,_) ((s2,_),_,_) -> compare s1 s2) ps |> remove_dupl in
-        let (off, str) = List.fold_left
-            (fun (off,x) (((s,e),_,_) as p) ->
-               let str = patch_to_str p in
-               (* Printf.printf "current off : %d | modif : %d - %d -- %s\n%!" off s e str; *)
-               (e,Printf.sprintf "%s%s%s" x (String.sub txt off (s - off)) str)
-            ) (s,"") ps
-        in str ^ (String.sub txt off (e - off))
-      | Rewrite str -> str
-      | Get (arr,i) ->
-        Printf.sprintf "%s.!(%s)" (patch_to_str arr) (patch_to_str i)
-      | Set (arr,i,v) ->
-        Printf.sprintf "%s.!(%s) <- %s"
-          (patch_to_str arr) (patch_to_str i) (patch_to_str v)
-      | ArrayConstructor elts_p -> begin
-          match elts_p with
-          | [] -> par := false; "Floatarray.empty"
-          | [x1] ->
-            Printf.sprintf "Floatarray.make1 %s" (patch_to_str x1)
-          | [x1;x2] ->
-            Printf.sprintf "Floatarray.make2 %s %s"
-              (patch_to_str x1) (patch_to_str x2)
-          | [x1;x2;x3] ->
-            Printf.sprintf "Floatarray.make3 %s %s %s"
-              (patch_to_str x1) (patch_to_str x2) (patch_to_str x3)
-          | [x1;x2;x3;x4] ->
-            Printf.sprintf "Floatarray.make4 %s %s %s %s"
-              (patch_to_str x1) (patch_to_str x2) (patch_to_str x3) (patch_to_str x4)
-          | _ ->
-            let elts_p = List.map (fun (pos,kind,_) -> (pos,kind,false)) elts_p in
-            let str = patch_to_str ((s,e), PatchList elts_p, false) in
-            Printf.sprintf "Floatarray.from_array %s" str
-        end
-    in
-    if !par && not (par_start_end_match str) then "(" ^ str ^ ")" else str
-end
-
-let rec remove_dupl = function
-  | [] | [_] as xx -> xx
-  | (((xs,xe),_) as x) :: (((ys,ye),_) :: xx as yy) ->
-    if xs <= ys && ye <= xe then
-      (* we remove y *)
-      remove_dupl (x :: xx)
-    else if ys <= xs && xe <= ye then
-      (* we remove x *)
-      remove_dupl yy
-    else
-      x :: remove_dupl yy
-
-let patch locs sources =
-  let b = Buffer.create (String.length sources) in
-  let locs = locs
-             |> List.sort (fun ((start1, _), _) ((start2, _), _) -> compare start1 start2)
-             |> remove_dupl
-  in
-  let rec loop off = function
-    | ((start, end_), txt) :: rest ->
-      (* Printf.printf "current off : %d | modif : %d - %d -- %s\n%!" off start end_ txt; *)
-      Buffer.add_substring b sources off (start - off);
-      Buffer.add_string b txt;
-      loop end_ rest
-    | [] ->
-      Buffer.add_substring b sources off (String.length sources - off);
-      Buffer.contents b
-  in
-  loop 0 locs
-
 module TypUtils = struct
   (* Type related code *)
   open Typedtree
@@ -321,10 +208,10 @@ module RefactorFloatArray = struct
   open TypUtils
   open Location
 
-  let patch_list_to_kind l = if l = [] then NoPatch else PatchList l
+  let add_to (l : 'a list ref) (elt : 'a) = l := elt :: !l
 
   (* Working with positions *)
-  let get_pos texp = (texp.exp_loc.loc_start.pos_cnum, texp.exp_loc.loc_end.pos_cnum)
+  let get_loc texp = (texp.exp_loc.loc_start.pos_cnum, texp.exp_loc.loc_end.pos_cnum)
 
   let pos_in (s1,e1) (s2,e2) = s2 <= s1 && e1 <= e2
 
@@ -361,8 +248,8 @@ module RefactorFloatArray = struct
   let value_binding patches _ iter vb =
     match fetch_attr_loc "ignore" vb.vb_attributes with
     | Some loc ->
-      let loc_cnum = loc.loc_start.pos_cnum,loc.loc_end.pos_cnum in
-      patches := (loc_cnum, Rewrite "", false) :: !patches
+      let loc = loc.loc_start.pos_cnum,loc.loc_end.pos_cnum in
+      patches := (mk_remove_patch ~loc) :: !patches
     | None -> default_iterator.value_binding iter vb
 
   let rec filter_split p = function
@@ -424,20 +311,20 @@ module RefactorFloatArray = struct
   let rec expr patches file_log iter texp =
     begin match fetch_attr_loc "ignore" texp.exp_attributes with
       | Some loc ->
-        let loc_cnum = loc.loc_start.pos_cnum,loc.loc_end.pos_cnum in
-        patches := (loc_cnum, Rewrite "", false) :: !patches
+        let loc = loc.loc_start.pos_cnum,loc.loc_end.pos_cnum in
+        mk_remove_patch ~loc |> add_to patches
       | None ->
         begin match fetch_attr "rewrite" texp.exp_attributes with
           | Some attr ->
-            let loc_cnum = attr.Parsetree.attr_loc.loc_start.pos_cnum, attr.attr_loc.loc_end.pos_cnum in
-            patches := (loc_cnum, Rewrite "", false) :: !patches;
+            let loc = attr.Parsetree.attr_loc.loc_start.pos_cnum, attr.attr_loc.loc_end.pos_cnum in
+            patches := (mk_remove_patch ~loc) :: !patches;
             (
               match texp.exp_desc with
               | Texp_apply (id,_) ->
                 let s = get_payload_string attr.attr_payload in
-                let pos = get_pos id in
-                let pos = if s = "" then (fst pos, snd pos + 1) else pos in
-                patches := (pos, Rewrite s, false) :: !patches
+                let loc = get_loc id in
+                let loc = if s = "" then (fst loc, snd loc + 1) else loc in
+                mk_rewrite_patch ~loc s |> add_to patches
               | _ -> ()
             );
             expr_no_attr patches file_log iter texp !put_par
@@ -455,7 +342,8 @@ module RefactorFloatArray = struct
           let lpar = c_lhs.pat_loc.loc_start.pos_cnum - 1 in
           let rpar = attr_loc.loc_end.pos_cnum in
           let id_end = c_lhs.pat_loc.loc_end.pos_cnum in
-          patches := ((lpar, lpar+1), Rewrite "", false) :: ((id_end, rpar+1), Rewrite "", false) :: !patches
+          mk_remove_patch ~loc:(lpar, lpar+1) |> add_to patches;
+          mk_remove_patch ~loc:(id_end, rpar+1) |> add_to patches
         );
       default_iterator.expr iter texp
     | Texp_array l when moregeneral_expand_env texp.exp_env float_array_typ texp.exp_type ->
@@ -463,36 +351,22 @@ module RefactorFloatArray = struct
           let elt_patch = ref [] in
           let iter = find_float_iterator elt_patch file_log in
           iter.expr iter elt_t;
-          (get_pos elt_t, patch_list_to_kind !elt_patch, put_par_on_child elt_t)
+          mk_seq_patch ~loc:(get_loc elt_t) ~par:(put_par_on_child elt_t) !elt_patch
         ) l in
-      patches := (get_pos texp, ArrayConstructor elt_patches, par) :: !patches
-    | Texp_apply
+      mk_array_constr_patch ~loc:(get_loc texp) ~par elt_patches |> add_to patches
+    (* TODO : adapt code
+       | Texp_apply
         ({exp_desc=Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "get"), _, _);
           exp_loc={loc_ghost=true;_};
           _},
          [(_, Some arr_exp); (_, Some i_exp)]) ->
-      if typ_matches_float_array arr_exp then (
-        let arr_pos = get_pos arr_exp in
-        let i_pos = get_pos i_exp in
-        let local_patch = ref [] in
-        default_iterator.expr (find_float_iterator local_patch file_log) texp;
-        let arr_patch, i_patch, other  = List.fold_left
-            (fun (arr_patch, i_patch, other) ((pos,_,_) as p) ->
-               if pos_in pos arr_pos then p::arr_patch, i_patch, other
-               else if pos_in pos i_pos then arr_patch, p::i_patch, other
-               else arr_patch, i_patch, p::other (* could be a type patch *)
-            ) ([],[],[]) !local_patch
-        in
-        let arr_patch = (arr_pos, patch_list_to_kind arr_patch, false) in
-        let i_patch = (i_pos, patch_list_to_kind i_patch, false) in
-        patches := (get_pos texp, Get (arr_patch, i_patch), false) :: (other @ !patches)
-      )
+    *)
     | Texp_apply
         ({exp_desc=Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "get"), _, _);
           exp_loc={loc_ghost=false;_};
           _} as f_exp, (_, Some arr_exp) :: _) ->
       if typ_matches_float_array arr_exp then
-        patches := (get_pos f_exp, Rewrite "Float.Array.get", false) :: !patches;
+        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.get" |> add_to patches;
       default_iterator.expr iter texp
     | Texp_apply
         ({exp_desc=
@@ -500,38 +374,23 @@ module RefactorFloatArray = struct
           _} as f_exp,
          [(_, Some arr_exp); _]) ->
       if typ_matches_float_array arr_exp then
-        patches := (get_pos f_exp, Rewrite "Float.Array.unsafe_get", false) :: !patches;
+        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.unsafe_get" |> add_to patches;
       default_iterator.expr iter texp
-    | Texp_apply
+    (* TODO : adapt code
+       | Texp_apply
         ({exp_desc=Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "set"), _, _);
           exp_loc={loc_ghost=true;_};
           _},
          [(_, Some arr_exp); (_, Some i_exp); (_, Some v_exp)])
-      when typ_matches_float_array arr_exp ->
-      let arr_pos = get_pos arr_exp in
-      let i_pos = get_pos i_exp in
-      let v_pos = get_pos v_exp in
-      let local_patch = ref [] in
-      default_iterator.expr (find_float_iterator local_patch file_log) texp;
-      let arr_patch, i_patch, v_patch, other = List.fold_left
-          (fun (arr_patch, i_patch, v_patch, other) ((pos,_,_) as p) ->
-             if pos_in pos arr_pos then p::arr_patch, i_patch, v_patch, other
-             else if pos_in pos i_pos then arr_patch, p::i_patch, v_patch, other
-             else if pos_in pos v_pos then arr_patch, i_patch, p::v_patch, other
-             else arr_patch, i_patch, v_patch, p::other (* could be a type patch *)
-          ) ([],[],[],[]) !local_patch
-      in
-      let arr_patch = (arr_pos, patch_list_to_kind arr_patch, false) in
-      let i_patch = (i_pos, patch_list_to_kind i_patch, false) in
-      let v_patch = (v_pos, patch_list_to_kind v_patch, false) in
-      patches := (get_pos texp, Set (arr_patch, i_patch, v_patch), false) :: (other @ !patches)
+       when typ_matches_float_array arr_exp ->
+    *)
     | Texp_apply
         ({exp_desc=
             Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "unsafe_set"), _, _);
           _} as f_exp,
          [(_, Some arr_exp); _; _]) ->
       if typ_matches_float_array arr_exp then
-        patches := (get_pos f_exp, Rewrite "Float.Array.unsafe_set", false) :: !patches;
+        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.unsafe_set" |> add_to patches;
       default_iterator.expr iter texp
     | Texp_apply
         ({exp_desc=
@@ -548,9 +407,8 @@ module RefactorFloatArray = struct
             else if is_float_ret then "Float.Array.map_from_array"
             else ""
           in
-          patches :=
-            if fun_name <> "" then (get_pos f_exp, Rewrite fun_name, false) :: !patches
-            else !patches
+          if fun_name <> "" then
+            mk_rewrite_patch ~loc:(get_loc f_exp) fun_name |> add_to patches
         with Invalid_argument _ -> ()
       end;
       default_iterator.expr iter texp
@@ -567,17 +425,15 @@ module RefactorFloatArray = struct
         else if exp_typ_match then "Floatarray.mapi_from_array"
         else ""
       in
-      patches :=
-        if fun_name = "" then !patches
-        else (get_pos f_exp, Rewrite fun_name, false) :: !patches;
+      if fun_name <> "" then
+        mk_rewrite_patch ~loc:(get_loc f_exp) fun_name |> add_to patches;
       default_iterator.expr iter texp
-    (*
-    | Texp_apply
+    (* TODO : adapt_code
+       | Texp_apply
         ({exp_desc=
             Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "map2"), _, _);
           _} as f_exp,
          [ _; (_, Some arr1_exp); (_, Some arr2_exp)]) ->
-           TODO
     *)
     | Texp_apply
         ({exp_desc=
@@ -585,7 +441,7 @@ module RefactorFloatArray = struct
           _},
          [ _; _ ; (_, Some v_exp)])
       when typ_matches_float v_exp ->
-      patches := (get_pos texp, Rewrite "Floatarray.make_matrix", false) :: !patches;
+      mk_rewrite_patch ~loc:(get_loc texp) "Floatarray.make_matrix" |> add_to patches;
       default_iterator.expr iter texp
     | Texp_apply
         ({exp_desc=
@@ -596,7 +452,7 @@ module RefactorFloatArray = struct
           let _, t_aux = get_arg_and_ret f.exp_type in
           let arg, _ = get_arg_and_ret t_aux in
           if moregeneral f.exp_env float_typ arg then
-            patches := (get_pos f_exp, Rewrite "Float.Array.iteri", false) :: !patches
+            mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.iteri" |> add_to patches
         with Assert_failure _ -> () end;
       default_iterator.expr iter texp
     | Texp_apply
@@ -610,7 +466,7 @@ module RefactorFloatArray = struct
           let is_float_arg1 = moregeneral f.exp_env float_typ arg1 in
           let is_float_arg2 = moregeneral f.exp_env float_typ arg2 in
           if is_float_arg1 && is_float_arg2 then
-            patches := (get_pos f_exp, Rewrite "Float.Array.iter2", false) :: !patches
+            mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.iter2" |> add_to patches
           else if is_float_arg1 || is_float_arg2 then
             file_log := ("iter2", f_exp.exp_loc.loc_start.pos_lnum) :: !file_log
           else
@@ -622,50 +478,40 @@ module RefactorFloatArray = struct
             Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "make"), _, _);
           _} as f_exp,
          [ _; (_, Some v_exp)]) ->
-      patches :=
-        if typ_matches_float v_exp then
-          (get_pos f_exp, Rewrite "Float.Array.make", false) :: !patches
-        else !patches;
+      if typ_matches_float v_exp then
+        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.make" |> add_to patches;
       default_iterator.expr iter texp
     | Texp_apply
         ({exp_desc=
             Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "fill"), _, _);
           _} as f_exp,
          (_,Some arr_exp) :: _) ->
-      patches :=
-        if typ_matches_float_array arr_exp then
-          (get_pos f_exp, Rewrite "Float.Array.fill", false) :: !patches
-        else !patches;
+      if typ_matches_float_array arr_exp then
+        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.fill" |> add_to patches;
       default_iterator.expr iter texp
     | Texp_apply
         ({exp_desc=
             Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "fold_left"), _, _);
           _} as f_exp,
          [_; _; (_, Some arr_exp)]) ->
-      patches :=
-        if typ_matches_float_array arr_exp then
-          (get_pos f_exp, Rewrite "Float.Array.fold_left", false) :: !patches
-        else !patches;
+      if typ_matches_float_array arr_exp then
+        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.fold_left" |> add_to patches;
       default_iterator.expr iter texp
     | Texp_apply
         ({exp_desc=
             Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "fold_right"), _, _);
           _} as f_exp,
          [_; (_, Some arr_exp); _]) ->
-      patches :=
-        if typ_matches_float_array arr_exp then
-          (get_pos f_exp, Rewrite "Float.Array.fold_right", false) :: !patches
-        else !patches;
+      if typ_matches_float_array arr_exp then
+        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.fold_right" |> add_to patches;
       default_iterator.expr iter texp
     | Texp_apply
         ({exp_desc=
             Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "mem"), _, _);
           _} as f_exp,
          [_; (_, Some arr_exp)]) ->
-      patches :=
-        if typ_matches_float_array arr_exp then
-          (get_pos f_exp, Rewrite "Float.Array.mem", false) :: !patches
-        else !patches;
+      if typ_matches_float_array arr_exp then
+        mk_rewrite_patch ~loc:(get_loc f_exp) "Float.Array.mem" |> add_to patches;
       default_iterator.expr iter texp
     | Texp_ident (Path.Pdot (
         Path.Pdot (_, "Array"),
@@ -676,7 +522,7 @@ module RefactorFloatArray = struct
          List.for_all (fun t -> not (moregeneral texp.exp_env float_array_array_typ t)) arg_ts
       then
         let fun_name = if fun_name = "create_float" then "create" else fun_name in
-        patches := (get_pos texp, Rewrite ("Float.Array." ^ fun_name), false) :: !patches
+        mk_rewrite_patch ~loc:(get_loc texp) ("Float.Array." ^ fun_name) |> add_to patches
     | Texp_apply
         ({exp_desc=
             Texp_ident (Path.Pdot (
@@ -690,7 +536,7 @@ module RefactorFloatArray = struct
           _} as f_exp, args)
       when List.exists (fun (_,x) -> Option.fold ~none:false ~some:typ_matches_float_array x) args
         || typ_matches_float_array texp ->
-      patches := (get_pos f_exp, Rewrite ("Float.Array." ^ fun_name), false) :: !patches;
+      mk_rewrite_patch ~loc:(get_loc f_exp) ("Float.Array." ^ fun_name) |> add_to patches;
       default_iterator.expr iter texp
     (* Case where we inspect polymorphic uses of 'a array as float array : only fills the log *)
     | Texp_apply
@@ -726,22 +572,21 @@ module RefactorFloatArray = struct
   and typ patches _file_log iter ctyp =
     match fetch_attr_loc "tmp_annot_ret" ctyp.ctyp_attributes with
     | Some attr_loc ->
-      let pos_end = attr_loc.loc_end.pos_cnum + 2 in
-      let pos_start = ctyp.ctyp_loc.loc_start.pos_cnum - 4 in
-      patches := ((pos_start, pos_end), Rewrite "", false) :: !patches
+      let loc = (attr_loc.loc_end.pos_cnum + 2, ctyp.ctyp_loc.loc_start.pos_cnum - 4) in
+      mk_remove_patch ~loc |> add_to patches
     | None ->
       begin match fetch_attr_loc "ignore" ctyp.ctyp_attributes with
         | Some loc ->
-          let loc_cnum = loc.loc_start.pos_cnum,loc.loc_end.pos_cnum in
-          patches := (loc_cnum, Rewrite "", false) :: !patches
+          let loc = loc.loc_start.pos_cnum,loc.loc_end.pos_cnum in
+          mk_remove_patch ~loc |> add_to patches
         | None ->
           begin match ctyp.ctyp_desc with
             | Ttyp_constr (array_p, _,
                            [ {ctyp_desc=Ttyp_constr (float_p, _, []); _} ])
               when array_p = array_path && float_p = float_path ->
-              let pos = ctyp.ctyp_loc.loc_start.pos_cnum, ctyp.ctyp_loc.loc_end.pos_cnum in
-              if pos <> (-1,-1) then
-                patches := (pos, Rewrite "floatarray", false) :: !patches
+              let loc = ctyp.ctyp_loc.loc_start.pos_cnum, ctyp.ctyp_loc.loc_end.pos_cnum in
+              if loc <> (-1,-1) then
+                mk_rewrite_patch ~loc "floatarray" |> add_to patches
             | _ -> default_iterator.typ iter ctyp
           end
       end
@@ -759,7 +604,7 @@ module RefactorFloatArray = struct
     if List.length str.str_items = 1 && (List.hd str.str_items).str_loc.loc_start.pos_cnum = -1 then (
       match (List.hd str.str_items).str_desc with
       | Tstr_include {incl_mod; _} -> get_structure_of_mod_expr incl_mod |> gen_open_patch
-      | _ -> ((-1,-1), Rewrite "", false)
+      | _ -> assert false
     )
     else
       let last_open =
@@ -772,11 +617,11 @@ module RefactorFloatArray = struct
       match last_open with
       | Some {str_loc; _} ->
         let pos = str_loc.loc_end.pos_cnum in
-        ((pos,pos), Rewrite "\nopen Floatarray", false)
+        mk_rewrite_patch ~loc:(pos,pos) "\nopen Floatarray"
       | None ->
         let str_head = str.str_items |> List.filter (fun s -> s.str_loc.loc_start.pos_cnum <> -1) |> List.hd in
         let pos = str_head.str_loc.loc_start.pos_cnum in
-        ((pos,pos), Rewrite "open Floatarray\n\n", false)
+        mk_rewrite_patch ~loc:(pos,pos) "open Floatarray\n\n"
 
   let main (cmt_file : string) : result =
     let cmt = Cmt_format.read_cmt cmt_file in
@@ -788,7 +633,7 @@ module RefactorFloatArray = struct
       | Implementation str -> begin
           iter.structure iter str;
           if List.length !patches > 0 then
-            patches := (gen_open_patch str) :: !patches
+            gen_open_patch str |> add_to patches
         end
       | Interface sg -> iter.signature iter sg
       | _ -> Printf.printf "Not an implementation nor an interface : %s\n%!" cmt_file
@@ -798,9 +643,7 @@ module RefactorFloatArray = struct
       match cmt.cmt_sourcefile with
       | Some f ->
         let filename = Filename.concat (Filename.dirname cmt_file) (Filename.basename f) in
-        let txt = read filename in
-        let patches = List.map (fun ((pos,_,_) as patch) -> (pos, patch_to_str txt patch)) patches in
-        patch patches txt |> write filename;
+        read filename |> apply_patch patches |> write filename;
         Log.add_file_entries filename !file_log;
         Ok
       | None -> Err "No source file linked"

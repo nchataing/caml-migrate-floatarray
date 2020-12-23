@@ -1,7 +1,7 @@
 let to_array = Float.Array.to_array Fun.id
 let from_array = Float.Array.from_array Fun.id
 
-let empty : floatarray = Obj.magic [||]
+let empty () : floatarray = Obj.magic [||]
 
 type t1 = { x1 : float}
 type t2 = { x1 : float; x2 : float }
