@@ -1,6 +1,6 @@
 all: clean
-	dune build refactor.exe
-	cp _build/default/refactor.exe .
+	dune build src/refactor.exe
+	cp _build/default/src/refactor.exe .
 
 clean:
 	rm -f refactor.exe
