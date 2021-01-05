@@ -1,4 +1,6 @@
 
+let () = Describe.iter_module_descrs ~f:(fun _ _ -> ())
+
 let () =
   (* this should point to an ocaml installation lib directory *)
   Load_path.init ["../mlfi/mlfi-ins/lib"]
@@ -98,7 +100,7 @@ module RefactorFloatArray = struct
   let () = List.iter (fun (key,value) -> Hashtbl.add fun_tbl key value)
       [
         ("Array.length", [("float array -> _", Patch "Float.Array.length")]);
-        ("Array.get", [("float array -> _", Patch "Float.Array.get")]); 
+        ("Array.get", [("float array -> _", Patch "Float.Array.get")]);
         ("Array.set", [("float array -> _", Patch "Float.Array.set")]);
         ("Array.make", [("_ -> float -> _", Patch "Float.Array.make")]);
         ("Array.create", [("_ -> float -> _", Patch "Float.Array.create")]);
@@ -168,7 +170,7 @@ module RefactorFloatArray = struct
                 mk_rewrite_patch ~loc s |> add_to patches
               | _ -> ()
             );
-            expr_no_attr patches file_log iter texp 
+            expr_no_attr patches file_log iter texp
           | None -> expr_no_attr patches file_log iter texp
         end
     end
@@ -216,7 +218,7 @@ module RefactorFloatArray = struct
       |> Option.iter (fun l ->
           try List.iter (fun (t_str, action) ->
               if exp_type_match texp t_str then (
-                (match action with 
+                (match action with
                  | Patch s -> mk_rewrite_patch ~loc:(get_loc texp) s |> add_to patches
                  | Log -> file_log := (print_path path, texp.exp_loc.loc_start.pos_lnum) :: !file_log);
                 raise Stop
@@ -279,8 +281,8 @@ module RefactorFloatArray = struct
           end
       end
 
-  and find_float_iterator patches log = { 
-    default_iterator with 
+  and find_float_iterator patches log = {
+    default_iterator with
     value_binding = value_binding patches log;
     expr = expr patches log;
     typ = typ patches
@@ -315,7 +317,7 @@ module RefactorFloatArray = struct
         let pos = str_head.str_loc.loc_start.pos_cnum in
         mk_rewrite_patch ~loc:(pos,pos) "open Floatarray\n\n"
 
-  let main (cmt_file : string) : result =
+  let refactor (src_file : string) (cmt_file : string) : unit =
     let cmt = Cmt_format.read_cmt cmt_file in
     let patches = ref [] in
     let file_log = ref [] in
@@ -331,62 +333,9 @@ module RefactorFloatArray = struct
       | _ -> Printf.printf "Not an implementation nor an interface : %s\n%!" cmt_file
     end;
     let patches = !patches in
-    if patches = [] then Nop else begin
-      match cmt.cmt_sourcefile with
-      | Some f ->
-        let filename = Filename.concat (Filename.dirname cmt_file) (Filename.basename f) in
-        read filename |> apply_patch patches |> write filename;
-        Log.add_file_entries filename !file_log;
-        Ok
-      | None -> Err "No source file linked"
-    end
+    if patches <> [] then (
+      read src_file |> apply_patch patches |> write src_file;
+      Log.add_file_entries src_file !file_log
+    )
 end
 
-let main path =
-  if Filename.check_suffix path "cmt" || Filename.check_suffix path "cmti" then
-    try
-      let report = match RefactorFloatArray.main path with
-        | Ok -> Some "[Ok]"
-        | Err s -> Some (Printf.sprintf "[Err] %s" s)
-        | Nop -> None
-      in
-      match report with Some s -> Printf.printf "%s %s\n%!" path s | None -> ()
-    with
-    | Persistent_env.Error e -> Persistent_env.report_error Format.std_formatter e; Printf.printf "%!"
-    | e -> Printf.printf "[Exception] %s : %s" path (Printexc.to_string e)
-  else ()
-
-let rec explore ~f ?(process=true) path ignored_paths forced_paths =
-  let process =
-    if List.mem path forced_paths then (
-      Printf.printf "forcing %s\n%!" path;
-      true
-    ) else if List.mem path ignored_paths then (
-      Printf.printf "ignoring %s\n%!" path;
-      false
-    )
-    else process
-  in
-  if Sys.is_directory path then
-    Array.iter (fun file -> explore ~f ~process (Filename.concat path file) ignored_paths forced_paths) (Sys.readdir path)
-  else if process then f path else ()
-
-let () =
-  let init_path = ref "" in
-  let arg_fun = ref (fun _ -> ()) in
-  let ignored_paths = ref [] in
-  let forced_paths = ref [] in
-  let log_output = ref "" in
-  let open Arg in
-  parse
-    [
-      "-path", Set_string init_path, "initial <path>";
-      "-log", Set_string log_output, "<file> output log to file";
-      "-ignore", Unit (fun () -> arg_fun := (fun s -> ignored_paths := s :: !ignored_paths)), "<path> to ignore";
-      "-force", Unit (fun () -> arg_fun := (fun s -> forced_paths := s :: !forced_paths)), "<path> to force"
-    ]
-    (fun s -> !arg_fun s) "usage : ...";
-  explore ~f:main !init_path !ignored_paths !forced_paths;
-  if !log_output <> "" then (Log.write !log_output; Printf.printf "Log written in file %s\n%!" !log_output) else ()
-
-include IGNORE(Asttypes)

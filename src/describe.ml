@@ -77,10 +77,13 @@ let read filename =
   Fun.protect ~finally:(fun () -> close_in ic)
     (fun () -> really_input_string ic (in_channel_length ic))
 
-let get_module_descrs () =
+let iter_module_descrs ~f () =
   let _ = Sys.command "dune describe > tmp" in
   let descrs = read "tmp" |> lex |> parse |> parse_module_descrs in
   let _ = Sys.command "rm tmp" in
-  descrs
+  List.iter (fun {impl; cmt; intf; cmti; _} ->
+    if impl <> "" then f (Filename.chop "_build/default/" impl) cmt;
+    if intf <> "" then f (Filename.chop "_build/default/" intf) cmti;
+  ) descrs
+  
 
-let () = get_module_descrs () |> List.iter print_descr_item
