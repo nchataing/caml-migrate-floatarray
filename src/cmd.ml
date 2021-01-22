@@ -1,4 +1,3 @@
-
 let refactor (init_path : string) =
   let _ = Printf.sprintf "cd %s" init_path |> Sys.command in
   let () = Describe.iter_module_descrs ~f:Refactor.refactor in
@@ -17,4 +16,3 @@ let info =
   Term.info "refactor" ~version:"0.1" ~doc ~exits:Term.default_exits
 
 let () = Term.exit @@ Term.eval (refactor_t, info)
-
