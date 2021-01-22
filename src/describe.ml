@@ -24,10 +24,6 @@ let lex txt =
   loop 0;
   List.rev !tokens
 
-let print_tokens = List.iter (fun tok ->
-    let str = match tok with RPAR -> "RPAR" | LPAR -> "LPAR" | STR s -> Printf.sprintf "STR %s" s in
-    Printf.printf "%s\n" str)
-
 type sexp = Atom of string | List of sexp list
 
 let rec parse_ acc toks = match toks with
@@ -63,27 +59,17 @@ let parse_module_descrs = function
         | _ -> assert false) descrs
   | _ -> assert false
 
-let print_descr_item { name; impl; intf; cmt; cmti } =
-  Printf.printf "name : %s\nimpl : %s\nintf : %s\ncmt : %s\ncmti : %s\n" name impl intf cmt cmti
-
-let rec sexp_to_string = function
-  | Atom s -> Printf.sprintf "{A:%s}" s
-  | List l -> List.map sexp_to_string l |> String.concat ";" |> Printf.sprintf "L[%s]"
-
-let sexp_of_string s = parse @@ lex s
-
 let read filename =
   let ic = open_in_bin filename in
   Fun.protect ~finally:(fun () -> close_in ic)
     (fun () -> really_input_string ic (in_channel_length ic))
 
-let iter_module_descrs ~f () =
+let iter_module_descrs ~f =
   let _ = Sys.command "dune describe > tmp" in
   let descrs = read "tmp" |> lex |> parse |> parse_module_descrs in
   let _ = Sys.command "rm tmp" in
+  let n = String.length "_build/default/" in
   List.iter (fun {impl; cmt; intf; cmti; _} ->
-    if impl <> "" then f (Filename.chop "_build/default/" impl) cmt;
-    if intf <> "" then f (Filename.chop "_build/default/" intf) cmti;
+    if impl <> "" then f (String.sub impl n (String.length impl - n)) cmt;
+    if intf <> "" then f (String.sub intf n (String.length intf - n)) cmti;
   ) descrs
-  
-
