@@ -1,7 +1,7 @@
 type loc = int * int
 
 type kind =
-  | Seq (* sequenctial patching, sub patches are applied in order *)
+  | Seq (* sequential patching, sub patches are applied in order *)
   | F of (string -> string list -> string)
 
 (* a function defines how to rearrange sub patches *)
@@ -84,6 +84,8 @@ let mk_array_constr_patch ~loc ?(par = false) sub =
     sub;
     par;
   }
+
+let mk_annot_patch ~loc f = { loc; kind = F (fun txt _ -> f txt); sub = []; par = false }
 
 let apply_patch patches txt =
   let loc = (0, String.length txt - 1) in
