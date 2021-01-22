@@ -69,13 +69,17 @@ let read filename =
     ~finally:(fun () -> close_in ic)
     (fun () -> really_input_string ic (in_channel_length ic))
 
-let iter_module_descrs ~f =
+let iter_module_descrs ~f ~ignored =
   let _ = Sys.command "dune describe > tmp" in
   let descrs = read "tmp" |> lex |> parse |> parse_module_descrs in
   let _ = Sys.command "rm tmp" in
   let n = String.length "_build/default/" in
   List.iter
     (fun { impl; cmt; intf; cmti; _ } ->
-      if impl <> "" then f (String.sub impl n (String.length impl - n)) cmt;
-      if intf <> "" then f (String.sub intf n (String.length intf - n)) cmti)
+      ( if impl <> "" then
+        let impl = String.sub impl n (String.length impl - n) in
+        if not (List.mem (Filename.basename impl) ignored) then f impl cmt );
+      if intf <> "" then
+        let intf = String.sub intf n (String.length intf - n) in
+        if not (List.mem (Filename.basename intf) ignored) then f intf cmti)
     descrs

@@ -1,5 +1,3 @@
-let () = Describe.iter_module_descrs ~f:(fun _ _ -> ())
-
 let () =
   (* this should point to an ocaml installation lib directory *)
   Load_path.init [ "." ]

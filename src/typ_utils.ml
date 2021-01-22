@@ -141,5 +141,3 @@ let rec split_arrow_typ t =
   | Tlink t -> split_arrow_typ t
   | Tarrow (l, t_arg, t_ret, _) -> (l, t_arg) :: split_arrow_typ t_ret
   | _ -> [ (Nolabel, t) ]
-
-(* true return type *)
