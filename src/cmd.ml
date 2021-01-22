@@ -14,7 +14,7 @@ let refactor_t = Term.(const refactor $ init_path)
 
 let info =
   let doc = "Refactor float array to floatarray in the given dune directory." in
-  Term.info "refactor" ~version "0.1" ~doc ~exits:Term.default_exits
+  Term.info "refactor" ~version:"0.1" ~doc ~exits:Term.default_exits
 
 let () = Term.exit @@ Term.eval (refactor_t, info)
 
