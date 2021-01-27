@@ -153,65 +153,114 @@ let rec expr patches file_log iter texp =
 
 and expr_no_attr patches file_log iter texp : unit =
   let par = Par.put () in
-  match texp.exp_desc with
-  | Texp_function { cases = { c_lhs; _ } :: _; _ } ->
-      List.fold_left
-        (fun acc (x, _, _) ->
-          match x with
-          | Tpat_constraint t -> fetch_attr_loc "tmp_annot" t.ctyp_attributes
-          | _ -> acc)
-        None c_lhs.pat_extra
-      |> Option.iter (fun attr_loc ->
-             let lpar = c_lhs.pat_loc.loc_start.pos_cnum - 1 in
-             let rpar = attr_loc.loc_end.pos_cnum in
-             let id_end = c_lhs.pat_loc.loc_end.pos_cnum in
-             mk_remove_patch ~loc:(lpar, lpar + 1) |> add_to patches;
-             mk_remove_patch ~loc:(id_end, rpar + 1) |> add_to patches);
-      default_iterator.expr iter texp
-  | Texp_array l when moregeneral_expand_env texp.exp_env (parse_typ "float array") texp.exp_type ->
-      let elt_patches =
-        List.map
-          (fun elt_t ->
-            let elt_patch = ref [] in
-            let iter = find_float_iterator elt_patch file_log in
-            iter.expr iter elt_t;
-            mk_seq_patch ~loc:(get_loc elt_t) ~par:(Par.put_on_child elt_t) !elt_patch)
-          l
-      in
-      mk_array_constr_patch ~loc:(get_loc texp) ~par elt_patches |> add_to patches
-  (* TODO : adapt code | Texp_apply ({exp_desc=Texp_ident (Path.Pdot (Path.Pdot (_, "Array"),
-     "get"), _, _); exp_loc={loc_ghost=true;_}; _}, [(_, Some arr_exp); (_, Some i_exp)]) -> *)
-  (* TODO : adapt code | Texp_apply ({exp_desc=Texp_ident (Path.Pdot (Path.Pdot (_, "Array"),
-     "set"), _, _); exp_loc={loc_ghost=true;_}; _}, [(_, Some arr_exp); (_, Some i_exp); (_, Some
-     v_exp)]) when typ_matches_float_array arr_exp -> *)
-  | Texp_ident (path, _, _) ->
-      Hashtbl.find_opt fun_tbl (print_path path)
-      |> Option.iter (fun l ->
-             try
-               List.iter
-                 (fun (t_str, action) ->
-                   if exp_type_match texp t_str then (
-                     ( match action with
-                     | Patch s -> mk_rewrite_patch ~loc:(get_loc texp) s |> add_to patches
-                     | Log ->
-                         file_log := (print_path path, texp.exp_loc.loc_start.pos_lnum) :: !file_log
-                     );
-                     raise Stop ))
-                 l
-             with Stop -> ())
-  (* Case where we inspect polymorphic uses of 'a array as float array : only fills the log *)
-  (* | Texp_apply ({exp_desc=Texp_ident (p, _, {val_type; _}); exp_env=env; _}, args) -> let ret_typ
-     = List.fold_left (fun f_typ (label,arg_exp) -> match arg_exp with | None -> f_typ | Some
-     arg_exp -> let generic_arg_typ, f_typ = get_arg_typ label f_typ in let instance_arg_typ =
-     arg_exp.exp_type in Option.iter (fun generic_arg_typ -> if poly_array_replaced_by_float_array
-     env generic_arg_typ instance_arg_typ then let pos = arg_exp.exp_loc.loc_start.pos_lnum in
-     file_log := (print_path p, pos) :: !file_log ) generic_arg_typ; f_typ ) val_type args in let _
-     = List.fold_left (fun f_typ (label,arg_typ) -> let gen_arg_typ, f_typ = get_arg_typ label f_typ
-     in let gen_arg_typ = Option.value ~default:f_typ gen_arg_typ in if
-     poly_array_replaced_by_float_array env gen_arg_typ arg_typ then let pos =
-     texp.exp_loc.loc_start.pos_lnum in file_log := (print_path p, pos) :: !file_log else (); f_typ
-     ) ret_typ (split_arrow_typ texp.exp_type) in default_iterator.expr iter texp *)
-  | _ -> default_iterator.expr iter texp
+  let extra_done = ref true in
+  begin
+    match texp.exp_desc with
+    | Texp_function { cases = { c_lhs; _ } :: _; _ } ->
+        List.fold_left
+          (fun acc (x, _, _) ->
+            match x with
+            | Tpat_constraint t -> fetch_attr_loc "tmp_annot" t.ctyp_attributes
+            | _ -> acc)
+          None c_lhs.pat_extra
+        |> Option.iter (fun attr_loc ->
+               let lpar = c_lhs.pat_loc.loc_start.pos_cnum - 1 in
+               let rpar = attr_loc.loc_end.pos_cnum in
+               let id_end = c_lhs.pat_loc.loc_end.pos_cnum in
+               mk_remove_patch ~loc:(lpar, lpar + 1) |> add_to patches;
+               mk_remove_patch ~loc:(id_end, rpar + 1) |> add_to patches);
+        default_iterator.expr iter texp
+    | Texp_array l when moregeneral_expand_env texp.exp_env (parse_typ "float array") texp.exp_type
+      ->
+        let elt_patches =
+          List.map
+            (fun elt_t ->
+              let elt_patch = ref [] in
+              let iter = find_float_iterator elt_patch file_log in
+              iter.expr iter elt_t;
+              mk_seq_patch ~loc:(get_loc elt_t) ~par:(Par.put_on_child elt_t) !elt_patch)
+            l
+        in
+        mk_array_constr_patch ~loc:(get_loc texp) ~par elt_patches |> add_to patches
+    | Texp_apply
+        ( {
+            exp_desc = Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "get"), _, _);
+            exp_loc = { loc_ghost = true; _ };
+            _;
+          },
+          [ (_, Some arr_exp); (_, Some i_exp) ] ) ->
+        if moregeneral_expand_env texp.exp_env (parse_typ "float array") arr_exp.exp_type then (
+          let local_patch = ref [] in
+          let iter = find_float_iterator local_patch file_log in
+          let arr_patch =
+            iter.expr iter arr_exp;
+            mk_seq_patch ~loc:(get_loc arr_exp) !local_patch
+          in
+          let i_patch =
+            local_patch := [];
+            iter.expr iter i_exp;
+            mk_seq_patch ~loc:(get_loc i_exp) !local_patch
+          in
+          mk_get_patch ~loc:(get_loc texp) arr_patch i_patch |> add_to patches;
+          extra_done := false )
+    | Texp_apply
+        ( {
+            exp_desc = Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "set"), _, _);
+            exp_loc = { loc_ghost = true; _ };
+            _;
+          },
+          [ (_, Some arr_exp); (_, Some i_exp); (_, Some v_exp) ] ) ->
+        if moregeneral_expand_env texp.exp_env (parse_typ "float array") arr_exp.exp_type then (
+          let local_patch = ref [] in
+          let iter = find_float_iterator local_patch file_log in
+          let arr_patch =
+            iter.expr iter arr_exp;
+            mk_seq_patch ~loc:(get_loc arr_exp) !local_patch
+          in
+          let i_patch =
+            local_patch := [];
+            iter.expr iter i_exp;
+            mk_seq_patch ~loc:(get_loc i_exp) !local_patch
+          in
+          let v_patch =
+            local_patch := [];
+            iter.expr iter i_exp;
+            mk_seq_patch ~loc:(get_loc v_exp) !local_patch
+          in
+          mk_set_patch ~loc:(get_loc texp) arr_patch i_patch v_patch |> add_to patches;
+          extra_done := false )
+    | Texp_ident (path, _, _) ->
+        Hashtbl.find_opt fun_tbl (print_path path)
+        |> Option.iter (fun l ->
+               try
+                 List.iter
+                   (fun (t_str, action) ->
+                     if exp_type_match texp t_str then (
+                       ( match action with
+                       | Patch s -> mk_rewrite_patch ~loc:(get_loc texp) s |> add_to patches
+                       | Log ->
+                           file_log :=
+                             (print_path path, texp.exp_loc.loc_start.pos_lnum) :: !file_log );
+                       raise Stop ))
+                   l
+               with Stop -> ())
+    (* Case where we inspect polymorphic uses of 'a array as float array : only fills the log *)
+    (* | Texp_apply ({exp_desc=Texp_ident (p, _, {val_type; _}); exp_env=env; _}, args) -> let
+       ret_typ = List.fold_left (fun f_typ (label,arg_exp) -> match arg_exp with | None -> f_typ |
+       Some arg_exp -> let generic_arg_typ, f_typ = get_arg_typ label f_typ in let instance_arg_typ
+       = arg_exp.exp_type in Option.iter (fun generic_arg_typ -> if
+       poly_array_replaced_by_float_array env generic_arg_typ instance_arg_typ then let pos =
+       arg_exp.exp_loc.loc_start.pos_lnum in file_log := (print_path p, pos) :: !file_log )
+       generic_arg_typ; f_typ ) val_type args in let _ = List.fold_left (fun f_typ (label,arg_typ)
+       -> let gen_arg_typ, f_typ = get_arg_typ label f_typ in let gen_arg_typ = Option.value
+       ~default:f_typ gen_arg_typ in if poly_array_replaced_by_float_array env gen_arg_typ arg_typ
+       then let pos = texp.exp_loc.loc_start.pos_lnum in file_log := (print_path p, pos) ::
+       !file_log else (); f_typ ) ret_typ (split_arrow_typ texp.exp_type) in default_iterator.expr
+       iter texp *)
+    | _ -> default_iterator.expr iter texp
+  end;
+  let extra = function Texp_constraint cty -> iter.typ iter cty | _ -> () in
+  if not !extra_done then List.iter (fun (e, _, _) -> extra e) texp.exp_extra
 
 and typ patches iter ctyp =
   match fetch_attr_loc "tmp_annot_ret" ctyp.ctyp_attributes with

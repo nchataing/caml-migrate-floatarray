@@ -72,7 +72,7 @@ let read filename =
 let iter_module_descrs ~path ~f ~ignored =
   (* Get module descriptions *)
   let add_path = Filename.concat path in
-  let _ = Printf.sprintf "(cd %s && dune describe > tmp)" path |> Sys.command in 
+  let _ = Printf.sprintf "(cd %s && dune describe > tmp)" path |> Sys.command in
   let descrs = read (add_path "tmp") |> lex |> parse |> parse_module_descrs in
   let _ = Printf.sprintf "(cd %s && rm tmp)" path |> Sys.command in
   (* helper functions to remove the _build/default prefix *)
@@ -84,7 +84,7 @@ let iter_module_descrs ~path ~f ~ignored =
     (fun { impl; cmt; intf; cmti; _ } ->
       ( if impl <> "" then
         let impl = rm_prefix impl in
-        if not (List.mem impl ignored) then f (add_path impl) (add_path cmt));
+        if not (List.mem impl ignored) then f (add_path impl) (add_path cmt) );
       if intf <> "" then
         let intf = rm_prefix intf in
         if not (List.mem intf ignored) then f (add_path intf) (add_path cmti))

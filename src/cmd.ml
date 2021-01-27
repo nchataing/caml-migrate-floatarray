@@ -1,5 +1,4 @@
-let () =
-  Load_path.init [ "/usr/lib/ocaml/" ]
+let () = Load_path.init [ "/usr/lib/ocaml/" ]
 
 let refactor (path : string) (ignored : string list) =
   Describe.iter_module_descrs ~path ~f:Refactor.refactor ~ignored
