@@ -1,7 +1,3 @@
-let () =
-  (* this should point to an ocaml installation lib directory *)
-  Load_path.init [ "." ]
-
 let read filename =
   let ic = open_in_bin filename in
   Fun.protect

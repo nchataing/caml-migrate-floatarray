@@ -1,13 +1,12 @@
-let refactor (init_path : string) (ignored : string list) =
-  let _ = Printf.sprintf "cd %s" init_path |> Sys.command in
-  let () = Describe.iter_module_descrs ~f:Refactor.refactor ~ignored in
-  ignore (Sys.command "cd -")
+let () =
+  Load_path.init [ "/usr/lib/ocaml/" ]
 
-let annotate (init_path : string) (typ_str : string) (ignored : string list) =
-  let _ = Printf.sprintf "cd %s" init_path |> Sys.command in
+let refactor (path : string) (ignored : string list) =
+  Describe.iter_module_descrs ~path ~f:Refactor.refactor ~ignored
+
+let annotate (path : string) (typ_str : string) (ignored : string list) =
   let typ_match = Typ_utils.parse_typ typ_str in
-  let () = Describe.iter_module_descrs ~f:(Annotate.annotate ~typ_match) ~ignored in
-  ignore (Sys.command "cd -")
+  Describe.iter_module_descrs ~path ~f:(Annotate.annotate ~typ_match) ~ignored
 
 open Cmdliner
 

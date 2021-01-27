@@ -1,3 +1,4 @@
 (executable
  (name cmd)
+ (modes byte native)
  (libraries compiler-libs.common cmdliner))

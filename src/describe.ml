@@ -69,17 +69,23 @@ let read filename =
     ~finally:(fun () -> close_in ic)
     (fun () -> really_input_string ic (in_channel_length ic))
 
-let iter_module_descrs ~f ~ignored =
-  let _ = Sys.command "dune describe > tmp" in
-  let descrs = read "tmp" |> lex |> parse |> parse_module_descrs in
-  let _ = Sys.command "rm tmp" in
-  let n = String.length "_build/default/" in
+let iter_module_descrs ~path ~f ~ignored =
+  (* Get module descriptions *)
+  let add_path = Filename.concat path in
+  let _ = Printf.sprintf "(cd %s && dune describe > tmp)" path |> Sys.command in 
+  let descrs = read (add_path "tmp") |> lex |> parse |> parse_module_descrs in
+  let _ = Printf.sprintf "(cd %s && rm tmp)" path |> Sys.command in
+  (* helper functions to remove the _build/default prefix *)
+  let rm_prefix s =
+    let n = String.length "_build/default/" in
+    String.sub s n (String.length s - n)
+  in
   List.iter
     (fun { impl; cmt; intf; cmti; _ } ->
       ( if impl <> "" then
-        let impl = String.sub impl n (String.length impl - n) in
-        if not (List.mem (Filename.basename impl) ignored) then f impl cmt );
+        let impl = rm_prefix impl in
+        if not (List.mem impl ignored) then f (add_path impl) (add_path cmt));
       if intf <> "" then
-        let intf = String.sub intf n (String.length intf - n) in
-        if not (List.mem (Filename.basename intf) ignored) then f intf cmti)
+        let intf = rm_prefix intf in
+        if not (List.mem intf ignored) then f (add_path intf) (add_path cmti))
     descrs
