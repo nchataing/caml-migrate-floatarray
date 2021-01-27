@@ -63,19 +63,16 @@ let parse_module_descrs = function
         descrs
   | _ -> assert false
 
-let read filename =
-  let ic = open_in_bin filename in
-  Fun.protect
-    ~finally:(fun () -> close_in ic)
-    (fun () -> really_input_string ic (in_channel_length ic))
-
 let iter_module_descrs ~path ~f ~ignored =
   (* Get module descriptions *)
-  let add_path = Filename.concat path in
-  let _ = Printf.sprintf "(cd %s && dune describe > tmp)" path |> Sys.command in
-  let descrs = read (add_path "tmp") |> lex |> parse |> parse_module_descrs in
-  let _ = Printf.sprintf "(cd %s && rm tmp)" path |> Sys.command in
+  let tmp = Filename.temp_file "_" "_" in
+  let _ =
+    Io.with_chdir path (fun () ->
+        Sys.command (Filename.quote_command ~stdout:tmp "dune" [ "describe" ]))
+  in
+  let descrs = Io.read tmp |> lex |> parse |> parse_module_descrs in
   (* helper functions to remove the _build/default prefix *)
+  let add_path = Filename.concat path in
   let rm_prefix s =
     let n = String.length "_build/default/" in
     String.sub s n (String.length s - n)

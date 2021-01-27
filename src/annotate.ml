@@ -1,15 +1,3 @@
-let () = Load_path.init [ "" ]
-
-let read filename =
-  let ic = open_in_bin filename in
-  Fun.protect
-    ~finally:(fun () -> close_in ic)
-    (fun () -> really_input_string ic (in_channel_length ic))
-
-let write filename txt =
-  let oc = open_out_bin filename in
-  Fun.protect ~finally:(fun () -> close_out oc) (fun () -> output_string oc txt)
-
 let moregeneral env t_ref t_to_test =
   try Ctype.moregeneral env false t_ref t_to_test with Assert_failure _ -> false
 
@@ -430,4 +418,4 @@ let annotate ~(typ_match : Types.type_expr) (src_file : string) (cmt_file : stri
   end;
   process_signature ~tbl cmi.cmi_sign;
   let annots = generate_annotations ~tbl ~typ_match in
-  if annots <> [] then read src_file |> apply_patch annots |> write src_file
+  if annots <> [] then Io.read src_file |> apply_patch annots |> Io.write src_file

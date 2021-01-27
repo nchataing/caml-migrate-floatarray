@@ -1,13 +1,3 @@
-let read filename =
-  let ic = open_in_bin filename in
-  Fun.protect
-    ~finally:(fun () -> close_in ic)
-    (fun () -> really_input_string ic (in_channel_length ic))
-
-let write filename txt =
-  let oc = open_out_bin filename in
-  Fun.protect ~finally:(fun () -> close_out oc) (fun () -> output_string oc txt)
-
 (* TODO put log in a separate file *)
 module Log = struct
   let log : Buffer.t = Buffer.create 0
@@ -338,5 +328,5 @@ let refactor (src_file : string) (cmt_file : string) : unit =
   end;
   let patches = !patches in
   if patches <> [] then (
-    read src_file |> apply_patch patches |> write src_file;
+    Io.read src_file |> apply_patch patches |> Io.write src_file;
     Log.add_file_entries src_file !file_log )
