@@ -120,18 +120,17 @@ let iter_module_descrs ~path ~f ~ignored =
       List.iter Load_path.add_dir include_dirs;
       let process src_file annot_file =
         if src_file <> "" then
-        let src_file = rm_prefix src_file in
-            if List.mem src_file ignored then
-              Printf.printf "Ignoring %s.\n%!" src_file
-            else (
-              let src_file = add_path src_file in
-              if not @@ Sys.file_exists src_file then
+          let src_file = rm_prefix src_file in
+          if List.mem src_file ignored then Printf.printf "Ignoring %s.\n%!" src_file
+          else
+            let src_file = add_path src_file in
+            if not @@ Sys.file_exists src_file then
               Printf.printf "File %s is generated... ignoring it.\n" src_file
-            else
-              f src_file (add_path annot_file)
-            )
+            else f src_file (add_path annot_file)
       in
       List.iter
-        (fun { impl; cmt; intf; cmti; _ } -> (process impl cmt; process intf cmti))
+        (fun { impl; cmt; intf; cmti; _ } ->
+          process impl cmt;
+          process intf cmti)
         items)
     descrs

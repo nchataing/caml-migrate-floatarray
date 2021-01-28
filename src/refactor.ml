@@ -207,7 +207,7 @@ and expr_no_attr patches file_log iter texp : unit =
           in
           mk_get_patch ~loc:(get_loc texp) arr_patch i_patch |> add_to patches;
           extra_done := false;
-          get_or_set_used := true)
+          get_or_set_used := true )
     | Texp_apply
         ( {
             exp_desc = Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "set"), _, _);
@@ -234,7 +234,7 @@ and expr_no_attr patches file_log iter texp : unit =
           in
           mk_set_patch ~loc:(get_loc texp) arr_patch i_patch v_patch |> add_to patches;
           extra_done := false;
-          get_or_set_used := true)
+          get_or_set_used := true )
     | Texp_ident (path, _, _) ->
         Hashtbl.find_opt fun_tbl (print_path path)
         |> Option.iter (fun l ->
