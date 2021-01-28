@@ -22,7 +22,6 @@ open Typedtree
 open Tast_iterator
 open Patch
 open Typ_utils
-open Location
 
 let add_to (l : 'a list ref) (elt : 'a) = l := elt :: !l
 
@@ -128,6 +127,8 @@ exception Stop
 
 let default_iterator = Par.iterator
 
+let get_or_set_used = ref false
+
 let rec expr patches file_log iter texp =
   match fetch_attr_loc "ignore" texp.exp_attributes with
   | Some loc ->
@@ -205,7 +206,8 @@ and expr_no_attr patches file_log iter texp : unit =
             mk_seq_patch ~loc:(get_loc i_exp) !local_patch
           in
           mk_get_patch ~loc:(get_loc texp) arr_patch i_patch |> add_to patches;
-          extra_done := false )
+          extra_done := false;
+          get_or_set_used := true)
     | Texp_apply
         ( {
             exp_desc = Texp_ident (Path.Pdot (Path.Pdot (_, "Array"), "set"), _, _);
@@ -231,7 +233,8 @@ and expr_no_attr patches file_log iter texp : unit =
             mk_seq_patch ~loc:(get_loc v_exp) !local_patch
           in
           mk_set_patch ~loc:(get_loc texp) arr_patch i_patch v_patch |> add_to patches;
-          extra_done := false )
+          extra_done := false;
+          get_or_set_used := true)
     | Texp_ident (path, _, _) ->
         Hashtbl.find_opt fun_tbl (print_path path)
         |> Option.iter (fun l ->
@@ -330,12 +333,13 @@ let refactor (src_file : string) (cmt_file : string) : unit =
   let patches = ref [] in
   let file_log = ref [] in
   let iter = find_float_iterator patches file_log in
+  get_or_set_used := false;
 
   begin
     match cmt.cmt_annots with
     | Implementation str ->
         iter.structure iter str;
-        if List.length !patches > 0 then gen_open_patch str |> add_to patches
+        if !get_or_set_used then gen_open_patch str |> add_to patches
     | Interface sg -> iter.signature iter sg
     | _ -> Printf.printf "Not an implementation nor an interface : %s\n%!" cmt_file
   end;
