@@ -148,3 +148,17 @@ let rec split_arrow_typ t =
   | Tlink t -> split_arrow_typ t
   | Tarrow (l, t_arg, t_ret, _) -> (l, t_arg) :: split_arrow_typ t_ret
   | _ -> [ (Nolabel, t) ]
+
+(* Get the argument type with label [label], or the first argument type without label if NoLabel,
+   and returns the function type without the retrieved type *)
+let rec get_arg_and_ret label t =
+  let open Types in
+  match t.desc with
+  | Tlink t -> get_arg_and_ret label t
+  | Tarrow (Nolabel, t_arg, t_ret, _) -> (t_arg, t_ret)
+  | Tarrow (l, t_arg, t_ret, x) ->
+      if l = label then (t_arg, t_ret)
+      else
+        let res, modified_typ = get_arg_and_ret label t_ret in
+        (res, { t with desc = Tarrow (l, t_arg, modified_typ, x) })
+  | _ -> raise Not_found

@@ -5,8 +5,13 @@
 (* of the BSD license.  See the LICENSE file for details.         *)
 (******************************************************************)
 
-let moregeneral env t_ref t_to_test =
-  try Ctype.moregeneral env false t_ref t_to_test with Assert_failure _ -> false
+open Typedtree
+open Types
+open Asttypes
+open Tast_iterator
+open Location
+open Patch
+open Typ_utils
 
 let rec type_contains env t_out t_in =
   moregeneral env t_in t_out
@@ -16,83 +21,6 @@ let rec type_contains env t_out t_in =
   | Tarrow (_, arg_t, ret_t, _) -> type_contains env arg_t t_in || type_contains env ret_t t_in
   | Tconstr (_, ts, _) | Ttuple ts -> List.exists (fun t -> type_contains env t t_in) ts
   | _ -> false
-
-let rec print_path p =
-  let open Path in
-  match p with
-  | Pident id -> Ident.name id
-  | Pdot (p, s) ->
-      let s' = print_path p in
-      if s' = "Stdlib" then s else Printf.sprintf "%s.%s" s' s
-  | _ -> ""
-
-let typ_to_str t =
-  let rec aux t =
-    match t.Types.desc with
-    | Tlink t -> aux t
-    | Tarrow (label, t_arg, t_ret, _) ->
-        let prec = 0 in
-        let label =
-          match label with
-          | Nolabel -> ""
-          | Labelled s -> Printf.sprintf "%s:" s
-          | Optional s -> Printf.sprintf "?%s:" s
-        in
-        let prec_arg, s_arg = aux t_arg in
-        let prec_ret, s_ret = aux t_ret in
-        let s_arg = if prec >= prec_arg then "(" ^ s_arg ^ ")" else s_arg in
-        let s_ret = if prec > prec_ret then "(" ^ s_ret ^ ")" else s_ret in
-        (prec, Printf.sprintf "%s%s -> %s" label s_arg s_ret)
-    | Tconstr (p, args, _) ->
-        let prec = 2 in
-        let args_str =
-          match args with
-          | [] -> ""
-          | [ x ] ->
-              (let child_prec, s = aux x in
-               if prec > child_prec then "(" ^ s ^ ")" else s)
-              ^ " "
-          | _ -> "(" ^ (args |> List.map (fun t -> snd (aux t)) |> String.concat ", ") ^ ") "
-        in
-        (prec, Printf.sprintf "%s%s" args_str (print_path p))
-    | Ttuple ts -> (
-        let prec = 1 in
-        ( prec,
-          match ts with
-          | [] -> ""
-          | [ x ] -> snd (aux x)
-          | _ ->
-              List.map
-                (fun t ->
-                  let child_prec, s = aux t in
-                  if prec >= child_prec then "(" ^ s ^ ")" else s)
-                ts
-              |> String.concat " * " ) )
-    | Tvar (Some _) | Tvar None -> (3, "_")
-    | _ -> (0, "_")
-  in
-  snd (aux t)
-
-(* Get the argument type with label [label], or the first argument type without label if NoLabel,
-   and returns the function type without the retrieved type *)
-let rec get_arg_and_ret label t =
-  let open Types in
-  match t.desc with
-  | Tlink t -> get_arg_and_ret label t
-  | Tarrow (Nolabel, t_arg, t_ret, _) -> (t_arg, t_ret)
-  | Tarrow (l, t_arg, t_ret, x) ->
-      if l = label then (t_arg, t_ret)
-      else
-        let res, modified_typ = get_arg_and_ret label t_ret in
-        (res, { t with desc = Tarrow (l, t_arg, modified_typ, x) })
-  | _ -> raise Not_found
-
-open Typedtree
-open Types
-open Asttypes
-open Tast_iterator
-open Location
-open Patch
 
 type arg_kind = Named of string | Unnamed of int
 
@@ -357,7 +285,7 @@ let gen_annot_from_info ~typ_match info annots =
         let typ = rewrite_type_vars ~var_map ~env arg_typ in
         let annots =
           if typ.desc <> Tvar None && type_contains env typ typ_match then
-            let typ_str = typ_to_str typ in
+            let typ_str = print_typ typ in
             match get_pat_constraint_opt c_lhs.pat_extra with
             | Some t ->
                 let loc = t.ctyp_loc in
@@ -377,7 +305,7 @@ let gen_annot_from_info ~typ_match info annots =
             (* generate return type annotation here *)
             let ret_typ = rewrite_type_vars ~var_map ~env ret_typ in
             if ret_typ.desc <> Tvar None && type_contains env ret_typ typ_match then
-              let typ_str = typ_to_str ret_typ in
+              let typ_str = print_typ ret_typ in
               match
                 (get_exp_constraint_opt c_rhs.exp_extra, get_pat_constraint_opt c_lhs.pat_extra)
               with

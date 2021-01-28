@@ -43,7 +43,7 @@ let rec patch_to_str txt { loc = s, e; kind; sub; par } =
             (s, "") sub_str
         in
         str ^ String.sub txt off (e - off)
-    | F f -> List.map snd sub_str |> f txt
+    | F f -> f (String.sub txt s (e - s)) (List.map snd sub_str)
   in
   if par && not (par_start_end_match str) then "(" ^ str ^ ")" else str
 
@@ -95,5 +95,5 @@ let mk_array_constr_patch ~loc ?(par = false) sub =
 let mk_annot_patch ~loc f = { loc; kind = F (fun txt _ -> f txt); sub = []; par = false }
 
 let apply_patch patches txt =
-  let loc = (0, String.length txt - 1) in
+  let loc = (0, String.length txt) in
   mk_seq_patch ~loc patches |> patch_to_str txt

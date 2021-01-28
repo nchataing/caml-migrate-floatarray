@@ -153,20 +153,26 @@ and expr_no_attr patches file_log iter texp : unit =
   let extra_done = ref true in
   begin
     match texp.exp_desc with
-    | Texp_function { cases = { c_lhs; _ } :: _; _ } ->
-        List.fold_left
-          (fun acc (x, _, _) ->
-            match x with
-            | Tpat_constraint t -> fetch_attr_loc "tmp_annot" t.ctyp_attributes
-            | _ -> acc)
-          None c_lhs.pat_extra
-        |> Option.iter (fun attr_loc ->
-               let lpar = c_lhs.pat_loc.loc_start.pos_cnum - 1 in
-               let rpar = attr_loc.loc_end.pos_cnum in
-               let id_end = c_lhs.pat_loc.loc_end.pos_cnum in
-               mk_remove_patch ~loc:(lpar, lpar + 1) |> add_to patches;
-               mk_remove_patch ~loc:(id_end, rpar + 1) |> add_to patches);
-        default_iterator.expr iter texp
+    | Texp_function { cases; _ } ->
+        List.iter
+          (fun { c_lhs; c_rhs; c_guard } ->
+            List.iter
+              (fun (x, _, _) ->
+                match x with
+                | Tpat_constraint t -> (
+                    match fetch_attr_loc "tmp_annot" t.ctyp_attributes with
+                    | Some attr_loc ->
+                        let lpar = c_lhs.pat_loc.loc_start.pos_cnum - 1 in
+                        let rpar = attr_loc.loc_end.pos_cnum in
+                        let id_end = c_lhs.pat_loc.loc_end.pos_cnum in
+                        mk_remove_patch ~loc:(lpar, lpar + 1) |> add_to patches;
+                        mk_remove_patch ~loc:(id_end, rpar + 1) |> add_to patches
+                    | None -> iter.typ iter t )
+                | _ -> ())
+              c_lhs.pat_extra;
+            default_iterator.expr iter c_rhs;
+            Option.iter (default_iterator.expr iter) c_guard)
+          cases
     | Texp_array l when moregeneral_expand_env texp.exp_env (parse_typ "float array") texp.exp_type
       ->
         let elt_patches =
@@ -262,7 +268,7 @@ and expr_no_attr patches file_log iter texp : unit =
 and typ patches iter ctyp =
   match fetch_attr_loc "tmp_annot_ret" ctyp.ctyp_attributes with
   | Some attr_loc ->
-      let loc = (attr_loc.loc_end.pos_cnum + 2, ctyp.ctyp_loc.loc_start.pos_cnum - 4) in
+      let loc = (ctyp.ctyp_loc.loc_start.pos_cnum - 4, attr_loc.loc_end.pos_cnum + 2) in
       mk_remove_patch ~loc |> add_to patches
   | None -> (
       match fetch_attr_loc "ignore" ctyp.ctyp_attributes with
