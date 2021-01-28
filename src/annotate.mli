@@ -5,4 +5,4 @@
 (* of the BSD license.  See the LICENSE file for details.         *)
 (******************************************************************)
 
-val annotate : typ_match:Types.type_expr -> string -> string -> unit
+val annotate : typ_match:Types.type_expr -> has_changed:bool ref -> string -> string -> unit

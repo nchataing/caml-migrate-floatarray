@@ -15,16 +15,23 @@ let refactor (path : string) (ignored : string list) =
   build path;
   Describe.iter_module_descrs ~path ~f:Refactor.refactor ~ignored
 
-let annotate (path : string) (typ_str : string) (ignored : string list) =
+let annotate (path : string) (typ_str : string) (ignored : string list) : bool =
   build path;
   let typ_match = Typ_utils.parse_typ typ_str in
-  Describe.iter_module_descrs ~path ~f:(Annotate.annotate ~typ_match) ~ignored
+  let has_changed = ref false in
+  Describe.iter_module_descrs ~path ~f:(Annotate.annotate ~typ_match ~has_changed) ~ignored;
+  !has_changed
 
 let command (path : string) (ignored : string list) (annot : int) (not_refactor : bool) =
-  assert (annot >= 0);
+  if annot = -1 then (
+    let n = ref 0 in
+    while annotate path "float array" ignored do incr n done;
+    Printf.printf "Reached fixpoint in %d annotation passes.\n%!" !n;
+  ) else (
   for _ = 1 to annot do
-    annotate path "float array" ignored
-  done;
+    ignore (annotate path "float array" ignored)
+  done
+  );
   if not not_refactor then refactor path ignored
 
 open Cmdliner

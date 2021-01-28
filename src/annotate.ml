@@ -331,7 +331,7 @@ let gen_annot_from_info ~typ_match info annots =
 let generate_annotations ~tbl ~typ_match =
   Hashtbl.fold (fun _ -> gen_annot_from_info ~typ_match) tbl []
 
-let annotate ~(typ_match : Types.type_expr) (src_file : string) (cmt_file : string) =
+let annotate ~(typ_match : Types.type_expr) ~(has_changed : bool ref) (src_file : string) (cmt_file : string) =
   let cmt = Cmt_format.read_cmt cmt_file in
   let cmi_file = Filename.chop_suffix cmt_file ".cmt" ^ ".cmi" in
   let cmi = Cmi_format.read_cmi cmi_file in
@@ -353,4 +353,9 @@ let annotate ~(typ_match : Types.type_expr) (src_file : string) (cmt_file : stri
   end;
   process_signature ~tbl cmi.cmi_sign;
   let annots = generate_annotations ~tbl ~typ_match in
-  if annots <> [] then Io.read src_file |> apply_patch annots |> Io.write src_file
+  if annots <> [] then (
+    let old_digest = Digest.file src_file in
+    Io.read src_file |> apply_patch annots |> Io.write src_file;
+    let new_digest = Digest.file src_file in
+    if not (Digest.equal new_digest old_digest) then has_changed := true
+  )
