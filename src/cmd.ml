@@ -22,6 +22,26 @@ let annotate (path : string) (typ_str : string) (ignored : string list) : bool =
   Describe.iter_module_descrs ~path ~f:(Annotate.annotate ~typ_match ~has_changed) ~ignored;
   !has_changed
 
+let create_floatarray_library (path : string) (lib_name : string) : unit =
+  Io.with_chdir path (fun () ->
+      let ok = ref false in
+      try
+        if Sys.is_directory lib_name then
+          Printf.printf "%s does already exists in target repository.\n" lib_name
+        else ok := true
+      with Sys_error _ ->
+        ok := true;
+        if !ok then (
+          Unix.mkdir lib_name 0o755;
+          Io.with_chdir lib_name (fun () ->
+              Io.write (lib_name ^ ".ml") Floatarray_lib.impl;
+              Io.write (lib_name ^ ".mli") Floatarray_lib.intf;
+              Io.write "dune" (Printf.sprintf "(library (name %s))\n" lib_name);
+              Printf.printf
+                "Library %s created at the root of the repository. Update the dune files to link \
+                 when necessary.\n"
+                lib_name) ))
+
 let command (path : string) (ignored : string list) (annot : int) (not_refactor : bool) =
   if annot = -1 then (
     let n = ref 0 in
@@ -33,7 +53,10 @@ let command (path : string) (ignored : string list) (annot : int) (not_refactor 
     for _ = 1 to annot do
       ignore (annotate path "float array" ignored)
     done;
-  if not not_refactor then refactor path ignored
+  if not not_refactor then refactor path ignored;
+  create_floatarray_library path "floatarray"
+
+(* TODO add option to change the name *)
 
 open Cmdliner
 
