@@ -9,3 +9,13 @@
  (name cmd)
  (modes byte native)
  (libraries compiler-libs.common cmdliner))
+
+(rule
+ (with-stdout-to
+  floatarray_lib.ml
+  (progn
+   (echo "let impl = {|")
+   (cat ../misc/floatarray.ml)
+   (echo "|}\n\nlet intf = {|")
+   (cat ../misc/floatarray.mli)
+   (echo "|}\n"))))
