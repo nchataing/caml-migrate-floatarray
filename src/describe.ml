@@ -7,6 +7,8 @@
 
 type descr_item = { name : string; impl : string; intf : string; cmt : string; cmti : string }
 
+type container = { items : descr_item list; include_dirs : string list }
+
 type token = RPAR | LPAR | STR of string
 
 let lex txt =
@@ -48,27 +50,56 @@ let parse t = parse_ [] t |> fst
 
 let get_opt_string = function List [] -> "" | List [ Atom s ] -> s | _ -> assert false
 
-let parse_module_descrs = function
-  | List [ List [ Atom "executables"; List [ _; _; List [ Atom "modules"; List descrs ]; _ ] ] ] ->
-      List.map
-        (fun exp ->
-          match exp with
-          | List
+let parse_module_descrs sexp =
+  let process_descr exp =
+    match exp with
+    | List
+        [
+          List [ Atom "name"; Atom name ];
+          List [ Atom "impl"; impl ];
+          List [ Atom "intf"; intf ];
+          List [ Atom "cmt"; cmt ];
+          List [ Atom "cmti"; cmti ];
+        ] ->
+        let impl = get_opt_string impl in
+        let intf = get_opt_string intf in
+        let cmt = get_opt_string cmt in
+        let cmti = get_opt_string cmti in
+        { name; impl; intf; cmt; cmti }
+    | _ -> assert false
+  in
+  List.map
+    (function
+      | List
+          [
+            Atom "executables";
+            List
               [
-                List [ Atom "name"; Atom name ];
-                List [ Atom "impl"; impl ];
-                List [ Atom "intf"; intf ];
-                List [ Atom "cmt"; cmt ];
-                List [ Atom "cmti"; cmti ];
-              ] ->
-              let impl = get_opt_string impl in
-              let intf = get_opt_string intf in
-              let cmt = get_opt_string cmt in
-              let cmti = get_opt_string cmti in
-              { name; impl; intf; cmt; cmti }
-          | _ -> assert false)
-        descrs
-  | _ -> assert false
+                _;
+                _;
+                List [ Atom "modules"; List descrs ];
+                List [ Atom "include_dirs"; List include_dirs ];
+              ];
+          ]
+      | List
+          [
+            Atom "library";
+            List
+              [
+                _;
+                _;
+                _;
+                _;
+                _;
+                List [ Atom "modules"; List descrs ];
+                List [ Atom "include_dirs"; List include_dirs ];
+              ];
+          ] ->
+          let items = List.map process_descr descrs in
+          let include_dirs = List.map (function Atom s -> s | _ -> assert false) include_dirs in
+          { items; include_dirs }
+      | _ -> assert false)
+    (match sexp with List l -> l | _ -> assert false)
 
 let iter_module_descrs ~path ~f ~ignored =
   (* Get module descriptions *)
@@ -85,11 +116,15 @@ let iter_module_descrs ~path ~f ~ignored =
     String.sub s n (String.length s - n)
   in
   List.iter
-    (fun { impl; cmt; intf; cmti; _ } ->
-      ( if impl <> "" then
-        let impl = rm_prefix impl in
-        if not (List.mem impl ignored) then f (add_path impl) (add_path cmt) );
-      if intf <> "" then
-        let intf = rm_prefix intf in
-        if not (List.mem intf ignored) then f (add_path intf) (add_path cmti))
+    (fun { items; include_dirs } ->
+      List.iter Load_path.add_dir include_dirs;
+      List.iter
+        (fun { impl; cmt; intf; cmti; _ } ->
+          ( if impl <> "" then
+            let impl = rm_prefix impl in
+            if not (List.mem impl ignored) then f (add_path impl) (add_path cmt) );
+          if intf <> "" then
+            let intf = rm_prefix intf in
+            if not (List.mem intf ignored) then f (add_path intf) (add_path cmti))
+        items)
     descrs

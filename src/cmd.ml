@@ -25,13 +25,14 @@ let annotate (path : string) (typ_str : string) (ignored : string list) : bool =
 let command (path : string) (ignored : string list) (annot : int) (not_refactor : bool) =
   if annot = -1 then (
     let n = ref 0 in
-    while annotate path "float array" ignored do incr n done;
-    Printf.printf "Reached fixpoint in %d annotation passes.\n%!" !n;
-  ) else (
-  for _ = 1 to annot do
-    ignore (annotate path "float array" ignored)
-  done
-  );
+    while annotate path "float array" ignored do
+      incr n
+    done;
+    Printf.printf "Reached fixpoint in %d annotation passes.\n%!" !n )
+  else
+    for _ = 1 to annot do
+      ignore (annotate path "float array" ignored)
+    done;
   if not not_refactor then refactor path ignored
 
 open Cmdliner
