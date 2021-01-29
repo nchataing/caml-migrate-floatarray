@@ -22,7 +22,24 @@ let annotate (path : string) (typ_str : string) (ignored : string list) : bool =
   Describe.iter_module_descrs ~path ~f:(Annotate.annotate ~typ_match ~has_changed) ~ignored;
   !has_changed
 
-let create_floatarray_library (path : string) (lib_name : string) : unit =
+let create_floatarray_library (path : string) (lib_name : string) (use_get_set : string option) :
+    unit =
+  let get_set_impl_str =
+    Option.fold ~none:""
+      ~some:(fun descr ->
+        Printf.sprintf "let ( .%s ) = Float.Array.get\n\nlet ( .%s ) = Float.Array.set\n\n" descr
+          descr)
+      use_get_set
+  in
+  let get_set_intf_str =
+    Option.fold ~none:""
+      ~some:(fun descr ->
+        Printf.sprintf
+          "val ( .%s ) : floatarray -> int -> float\n\n\
+           val ( .%s<- ) : floatarray -> int -> float -> unit\n\n"
+          descr descr)
+      use_get_set
+  in
   Io.with_chdir path (fun () ->
       let ok = ref false in
       try
@@ -34,8 +51,8 @@ let create_floatarray_library (path : string) (lib_name : string) : unit =
         if !ok then (
           Unix.mkdir lib_name 0o755;
           Io.with_chdir lib_name (fun () ->
-              Io.write (lib_name ^ ".ml") Floatarray_lib.impl;
-              Io.write (lib_name ^ ".mli") Floatarray_lib.intf;
+              Io.write (lib_name ^ ".ml") (get_set_impl_str ^ Floatarray_lib.impl);
+              Io.write (lib_name ^ ".mli") (get_set_intf_str ^ Floatarray_lib.intf);
               Io.write "dune" (Printf.sprintf "(library (name %s))\n" lib_name);
               Printf.printf
                 "Library %s created at the root of the repository. Update the dune files to link \
@@ -55,7 +72,7 @@ let command (path : string) (ignored : string list) (annot : int) (not_refactor 
       ignore (annotate path "float array" ignored)
     done;
   if not not_refactor then refactor path use_get_set ignored;
-  create_floatarray_library path "floatarray"
+  create_floatarray_library path "floatarray" use_get_set
 
 (* TODO add option to change the name *)
 

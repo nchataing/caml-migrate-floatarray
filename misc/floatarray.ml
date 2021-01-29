@@ -1,7 +1,3 @@
-let ( .!() ) = Float.Array.get
-
-let ( .!()<- ) = Float.Array.set
-
 type a1 = { x : float }
 
 type a2 = { x : float; y : float }

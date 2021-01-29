@@ -1,7 +1,3 @@
-val ( .!() ) : floatarray -> int -> float
-
-val ( .!()<- ) : floatarray -> int -> float -> unit
-
 val make1 : float -> floatarray
 
 val make2 : float -> float -> floatarray
