@@ -13,6 +13,7 @@ open Location
 open Patch
 open Typ_utils
 
+(* Checks if t_out contains t_in *)
 let rec type_contains env t_out t_in =
   moregeneral env t_in t_out
   ||
@@ -26,6 +27,7 @@ type arg_kind = Named of string | Unnamed of int
 
 module SMap = Map.Make (String)
 
+(* We keep information about the functions that contain type variables *)
 type fn_info = {
   pat : pattern;
   expr : expression;
@@ -34,15 +36,19 @@ type fn_info = {
   (* the head of path is the function name *)
   path : string list;
   arg_typs : (arg_kind * type_expr) list;
+  (* For each argument of the function, we keep the most general type it is being used as *)
   mutable typ_var_map : type_expr SMap.t;
-  (* when two or more functions have the same name in a module, only the last one will be exposed *)
+  (* when two or more functions have the same name in a module, only the last one will be exposed in
+     the interface *)
   mutable last : bool;
+  (* type exposed in the signature of the module *)
   mutable sig_typ : type_expr option;
 }
 
-(* dummy Ident.t to use in order to initialize a ref *)
+(* dummy Ident.t used in order to initialize a ref *)
 let dummy_id = Ident.create_local "@@@"
 
+(* Returns the only function in the tbl which the path AND which 'last' flag is set *)
 let last_such_that_path_matches ~tbl ~path =
   let res_id = ref dummy_id in
   Hashtbl.iter
@@ -50,6 +56,9 @@ let last_such_that_path_matches ~tbl ~path =
     tbl;
   if !res_id = dummy_id then None else Some !res_id
 
+(* Transform the type t so that all its type variables are named differently. Note that we lose some
+   important property in anti-unification by doing so, but it doesn't matter in the scope of this
+   program. *)
 let name_typ_var t =
   let n = ref 0 in
   let rec aux t =
@@ -68,6 +77,7 @@ let name_typ_var t =
   in
   aux t
 
+(* get_typ_vars ('a -> int -> 'b -> unit) returns ["a"; "b"] *)
 let get_typ_vars t =
   let open Set.Make (String) in
   let rec aux t =
@@ -82,6 +92,7 @@ let get_typ_vars t =
   in
   aux t |> elements
 
+(* return the arguments of a function type (the return type counts as the last argument) *)
 let get_arg_typs t =
   let rec aux n t =
     match t.desc with
@@ -95,6 +106,8 @@ let get_arg_typs t =
   in
   aux 0 t
 
+(* At the value binding sites, we spot the functions which type contains some type variables, and
+   add them to the working table *)
 let value_binding ~tbl ~path sub ({ vb_pat; vb_expr; _ } as vb) =
   ( match vb_pat.pat_desc with
   | Tpat_var (id, { txt = name; _ }) ->
@@ -125,12 +138,15 @@ let value_binding ~tbl ~path sub ({ vb_pat; vb_expr; _ } as vb) =
   | _ -> () );
   default_iterator.value_binding sub vb
 
+(* module_binding keeps track of the path we're in *)
 let module_binding ~path sub mb =
   let old_path = !path in
   (path := match mb.mb_id with Some id -> Ident.name id :: !path | None -> []);
   default_iterator.module_binding sub mb;
   path := old_path
 
+(* For each type variable in gen_t, compare_to_generic returns its match in the type t e.g.
+   compare_to_generic ('a -> int) (float -> int) => [("a", float)] *)
 let rec compare_to_generic gen_t t =
   match (gen_t.desc, t.desc) with
   | Tvar (Some s), _ -> [ (s, t) ]
@@ -142,6 +158,7 @@ let rec compare_to_generic gen_t t =
       try List.map2 compare_to_generic gen_ts ts |> List.flatten with Invalid_argument _ -> [] )
   | _ -> []
 
+(* Compares t1 and t2 and returns their least general common generalisation *)
 let rec intersect_typs t1 t2 =
   let desc =
     match (t1.desc, t2.desc) with
@@ -169,10 +186,13 @@ let expr ~tbl sub texp =
   match texp.exp_desc with
   | Texp_apply ({ exp_desc = Texp_ident (Path.Pident id, _, _); _ }, args) when Hashtbl.mem tbl id
     ->
+      (* Case where one of the function of the tbl is applied *)
       let info = Hashtbl.find tbl id in
       let n = ref 0 in
       List.iter
         (fun (label, arg_exp) ->
+          (* for each argument of the function, we apply the anti-unification between the saved
+             least general generalisation and the type used in this particular application *)
           try
             let label =
               match label with
@@ -199,6 +219,7 @@ let expr ~tbl sub texp =
         args;
       default_iterator.expr sub texp
   | Texp_ident (Path.Pident id, _, _) when Hashtbl.mem tbl id ->
+      (* the function may be used but not applied e.g. as an argument to another function *)
       let info = Hashtbl.find tbl id in
       compare_to_generic info.typ texp.exp_type
       |> List.iter (fun (var, typ) ->
@@ -210,6 +231,7 @@ let expr ~tbl sub texp =
              info.typ_var_map <- SMap.add var typ info.typ_var_map)
   | _ -> default_iterator.expr sub texp
 
+(* We consider the signature of a function as one of its use *)
 let process_signature ~tbl : signature_item list -> unit =
   let rec process path = function
     | Sig_value (id, { val_type; _ }, Exported) -> (
@@ -236,6 +258,7 @@ let process_signature ~tbl : signature_item list -> unit =
   in
   List.iter (process [])
 
+(* Rewrites the type t with the knowledge acquired by anti-unification. *)
 let rec rewrite_type_vars ~var_map ~env t =
   let aux = rewrite_type_vars ~var_map ~env in
   let desc =
@@ -266,6 +289,8 @@ let get_exp_constraint_opt =
 let get_pat_constraint_opt =
   List.fold_left (fun acc (x, _, _) -> match x with Tpat_constraint t -> Some t | _ -> acc) None
 
+(* Now we generate new annotations for the functions. If there was no prior annotation, then we add
+   an attribute tmp_annot to the type, so that it can be removed during the refactoring *)
 let gen_annot_from_info ~typ_match info annots =
   let rec gen_annot_aux annots expr fun_typ =
     match expr.exp_desc with
