@@ -117,8 +117,14 @@ let mk_array_constr_patch ~loc ?(par = false) sub =
           | [ s1; s2; s3 ] -> Printf.sprintf "Floatarray.make3 %s %s %s" s1 s2 s3
           | [ s1; s2; s3; s4 ] -> Printf.sprintf "Floatarray.make4 %s %s %s %s" s1 s2 s3 s4
           | _ ->
-              let sub = List.map (fun p -> { p with par = false }) sub in
-              patch_to_str txt { loc; kind = Seq; sub; par }
+              let global_s, global_e = loc in
+              let sub =
+                List.map
+                  (fun ({ loc = s, e; _ } as p) ->
+                    { p with loc = (s - global_s, e - global_s); par = false })
+                  sub
+              in
+              patch_to_str txt { loc = (0, global_e - global_s); kind = Seq; sub; par = false }
               |> Printf.sprintf "Floatarray.from_array %s");
     sub;
     par;

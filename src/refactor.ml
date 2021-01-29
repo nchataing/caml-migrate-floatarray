@@ -350,6 +350,7 @@ let rec gen_open_patch str =
         mk_rewrite_patch ~loc:(pos, pos) "open Floatarray\n\n"
 
 let refactor ~use_get_set (src_file : string) (cmt_file : string) : unit =
+  Printf.printf "%s..." src_file;
   let cmt = Cmt_format.read_cmt cmt_file in
   let patches = ref [] in
   let file_log = ref [] in
@@ -369,4 +370,5 @@ let refactor ~use_get_set (src_file : string) (cmt_file : string) : unit =
   let patches = !patches in
   if patches <> [] then (
     Io.read src_file |> apply_patch patches |> Io.write src_file;
-    Log.add_file_entries src_file !file_log )
+    Log.add_file_entries src_file !file_log );
+  Printf.printf "[DONE]\n%!"
