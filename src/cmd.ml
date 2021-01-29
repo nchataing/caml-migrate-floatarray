@@ -27,7 +27,7 @@ let create_floatarray_library (path : string) (lib_name : string) (use_get_set :
   let get_set_impl_str =
     Option.fold ~none:""
       ~some:(fun descr ->
-        Printf.sprintf "let ( .%s ) = Float.Array.get\n\nlet ( .%s ) = Float.Array.set\n\n" descr
+        Printf.sprintf "let ( .%s ) = Float.Array.get\n\nlet ( .%s<- ) = Float.Array.set\n\n" descr
           descr)
       use_get_set
   in

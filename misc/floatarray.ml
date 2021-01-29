@@ -1,3 +1,7 @@
+let from_array = Float.Array.map_from_array Fun.id
+
+let to_array = Float.Array.map_to_array Fun.id
+
 type a1 = { x : float }
 
 type a2 = { x : float; y : float }

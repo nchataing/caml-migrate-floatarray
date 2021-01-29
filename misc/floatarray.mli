@@ -1,3 +1,7 @@
+val from_array : float array -> floatarray
+
+val to_array : floatarray -> float array
+
 val make1 : float -> floatarray
 
 val make2 : float -> float -> floatarray
