@@ -6,7 +6,12 @@
 (******************************************************************)
 
 val iterator : Tast_iterator.iterator
+(** Iterator based on Tast_iterator.default_iterator that computes at the same time if parenthesis
+    should be put around expressions *)
 
 val put : unit -> bool
+(** When using the above iterator put () tells if parenthesis should be put around the current
+    expression *)
 
 val put_on_child : Typedtree.expression -> bool
+(** Tells if parenthesis should be put around the children of an expression *)
