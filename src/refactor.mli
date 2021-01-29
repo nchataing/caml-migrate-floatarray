@@ -5,4 +5,4 @@
 (* of the BSD license.  See the LICENSE file for details.         *)
 (******************************************************************)
 
-val refactor : string -> string -> unit
+val refactor : use_get_set:string option -> string -> string -> unit

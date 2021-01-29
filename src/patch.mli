@@ -17,9 +17,13 @@ val mk_remove_patch : loc:loc -> t
 
 val mk_seq_patch : loc:loc -> ?par:bool -> t list -> t
 
-val mk_get_patch : loc:loc -> t -> t -> t
+val mk_ghost_get_patch : loc:loc -> op_descr:string -> t -> t -> t
 
-val mk_set_patch : loc:loc -> t -> t -> t -> t
+val mk_get_patch : loc:loc -> par:bool -> t -> t -> t
+
+val mk_ghost_set_patch : loc:loc -> op_descr:string -> t -> t -> t -> t
+
+val mk_set_patch : loc:loc -> par:bool -> t -> t -> t -> t
 
 val mk_array_constr_patch : loc:loc -> ?par:bool -> t list -> t
 

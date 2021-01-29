@@ -53,24 +53,56 @@ let mk_remove_patch ~loc = { loc; kind = F (fun _ _ -> ""); sub = []; par = fals
 
 let mk_seq_patch ~loc ?(par = false) sub = { loc; kind = Seq; sub; par }
 
-let mk_get_patch ~loc arr_p index_p =
-  {
-    loc;
-    kind =
-      F (fun _ l -> match l with [ a; i ] -> Printf.sprintf "%s.!(%s)" a i | _ -> assert false);
-    sub = [ arr_p; index_p ];
-    par = false;
-  }
-
-let mk_set_patch ~loc arr_p index_p val_p =
+let mk_ghost_get_patch ~loc ~op_descr arr_p index_p =
+  let op_ext, op_lpar, op_rpar = (op_descr.[0], op_descr.[1], op_descr.[2]) in
   {
     loc;
     kind =
       F
         (fun _ l ->
-          match l with [ a; i; v ] -> Printf.sprintf "%s.!(%s) <- %s" a i v | _ -> assert false);
+          match l with
+          | [ a; i ] -> Printf.sprintf "%s.%c%c%s%c" a op_ext op_lpar i op_rpar
+          | _ -> assert false);
+    sub = [ arr_p; index_p ];
+    par = false;
+  }
+
+let mk_get_patch ~loc ~par arr_p index_p =
+  {
+    loc;
+    kind =
+      F
+        (fun _ l ->
+          match l with [ a; i ] -> Printf.sprintf "Float.Array.get %s %s" a i | _ -> assert false);
+    sub = [ arr_p; index_p ];
+    par;
+  }
+
+let mk_ghost_set_patch ~loc ~op_descr arr_p index_p val_p =
+  let op_ext, op_lpar, op_rpar = (op_descr.[0], op_descr.[1], op_descr.[2]) in
+  {
+    loc;
+    kind =
+      F
+        (fun _ l ->
+          match l with
+          | [ a; i; v ] -> Printf.sprintf "%s.%c%c%s%c <- %s" a op_ext op_lpar i op_rpar v
+          | _ -> assert false);
     sub = [ arr_p; index_p; val_p ];
     par = false;
+  }
+
+let mk_set_patch ~loc ~par arr_p index_p val_p =
+  {
+    loc;
+    kind =
+      F
+        (fun _ l ->
+          match l with
+          | [ a; i; v ] -> Printf.sprintf "Float.Array.set %s %s %s" a i v
+          | _ -> assert false);
+    sub = [ arr_p; index_p; val_p ];
+    par;
   }
 
 let mk_array_constr_patch ~loc ?(par = false) sub =

@@ -5,6 +5,10 @@
 (* of the BSD license.  See the LICENSE file for details.         *)
 (******************************************************************)
 
+let get_or_set_used = ref false
+
+let ghost_get_set = ref None
+
 (* TODO put log in a separate file *)
 module Log = struct
   let log : Buffer.t = Buffer.create 0
@@ -127,8 +131,6 @@ exception Stop
 
 let default_iterator = Par.iterator
 
-let get_or_set_used = ref false
-
 let rec expr patches file_log iter texp =
   match fetch_attr_loc "ignore" texp.exp_attributes with
   | Some loc ->
@@ -194,18 +196,26 @@ and expr_no_attr patches file_log iter texp : unit =
           },
           [ (_, Some arr_exp); (_, Some i_exp) ] ) ->
         if moregeneral_expand_env texp.exp_env (parse_typ "float array") arr_exp.exp_type then (
+          let get_set_par = Option.is_none !ghost_get_set in
           let local_patch = ref [] in
           let iter = find_float_iterator local_patch file_log in
           let arr_patch =
             iter.expr iter arr_exp;
-            mk_seq_patch ~loc:(get_loc arr_exp) !local_patch
+            mk_seq_patch ~loc:(get_loc arr_exp)
+              ~par:(get_set_par && Par.put_on_child arr_exp)
+              !local_patch
           in
           let i_patch =
             local_patch := [];
             iter.expr iter i_exp;
-            mk_seq_patch ~loc:(get_loc i_exp) !local_patch
+            mk_seq_patch ~loc:(get_loc i_exp)
+              ~par:(get_set_par && Par.put_on_child i_exp)
+              !local_patch
           in
-          mk_get_patch ~loc:(get_loc texp) arr_patch i_patch |> add_to patches;
+          ( match !ghost_get_set with
+          | Some op_descr -> mk_ghost_get_patch ~loc:(get_loc texp) ~op_descr arr_patch i_patch
+          | None -> mk_get_patch ~loc:(get_loc texp) ~par arr_patch i_patch )
+          |> add_to patches;
           extra_done := false;
           get_or_set_used := true )
     | Texp_apply
@@ -216,23 +226,34 @@ and expr_no_attr patches file_log iter texp : unit =
           },
           [ (_, Some arr_exp); (_, Some i_exp); (_, Some v_exp) ] ) ->
         if moregeneral_expand_env texp.exp_env (parse_typ "float array") arr_exp.exp_type then (
+          let get_set_par = Option.is_none !ghost_get_set in
           let local_patch = ref [] in
           let iter = find_float_iterator local_patch file_log in
           let arr_patch =
             iter.expr iter arr_exp;
-            mk_seq_patch ~loc:(get_loc arr_exp) !local_patch
+            mk_seq_patch ~loc:(get_loc arr_exp)
+              ~par:(get_set_par && Par.put_on_child arr_exp)
+              !local_patch
           in
           let i_patch =
             local_patch := [];
             iter.expr iter i_exp;
-            mk_seq_patch ~loc:(get_loc i_exp) !local_patch
+            mk_seq_patch ~loc:(get_loc i_exp)
+              ~par:(get_set_par && Par.put_on_child i_exp)
+              !local_patch
           in
           let v_patch =
             local_patch := [];
             iter.expr iter i_exp;
-            mk_seq_patch ~loc:(get_loc v_exp) !local_patch
+            mk_seq_patch ~loc:(get_loc v_exp)
+              ~par:(get_set_par && Par.put_on_child v_exp)
+              !local_patch
           in
-          mk_set_patch ~loc:(get_loc texp) arr_patch i_patch v_patch |> add_to patches;
+          ( match !ghost_get_set with
+          | Some op_descr ->
+              mk_ghost_set_patch ~loc:(get_loc texp) ~op_descr arr_patch i_patch v_patch
+          | None -> mk_set_patch ~loc:(get_loc texp) ~par arr_patch i_patch v_patch )
+          |> add_to patches;
           extra_done := false;
           get_or_set_used := true )
     | Texp_ident (path, _, _) ->
@@ -328,18 +349,20 @@ let rec gen_open_patch str =
         let pos = str_head.str_loc.loc_start.pos_cnum in
         mk_rewrite_patch ~loc:(pos, pos) "open Floatarray\n\n"
 
-let refactor (src_file : string) (cmt_file : string) : unit =
+let refactor ~use_get_set (src_file : string) (cmt_file : string) : unit =
   let cmt = Cmt_format.read_cmt cmt_file in
   let patches = ref [] in
   let file_log = ref [] in
   let iter = find_float_iterator patches file_log in
   get_or_set_used := false;
+  ghost_get_set := use_get_set;
 
   begin
     match cmt.cmt_annots with
     | Implementation str ->
         iter.structure iter str;
-        if !get_or_set_used then gen_open_patch str |> add_to patches
+        if Option.is_some !ghost_get_set && !get_or_set_used then
+          gen_open_patch str |> add_to patches
     | Interface sg -> iter.signature iter sg
     | _ -> Printf.printf "Not an implementation nor an interface : %s\n%!" cmt_file
   end;

@@ -11,9 +11,9 @@ let build (path : string) =
   Io.with_chdir path (fun () -> Sys.command (Filename.quote_command "dune" [ "build"; "@check" ]))
   |> ignore
 
-let refactor (path : string) (ignored : string list) =
+let refactor (path : string) (use_get_set : string option) (ignored : string list) =
   build path;
-  Describe.iter_module_descrs ~path ~f:Refactor.refactor ~ignored
+  Describe.iter_module_descrs ~path ~f:(Refactor.refactor ~use_get_set) ~ignored
 
 let annotate (path : string) (typ_str : string) (ignored : string list) : bool =
   build path;
@@ -42,7 +42,8 @@ let create_floatarray_library (path : string) (lib_name : string) : unit =
                  when necessary.\n"
                 lib_name) ))
 
-let command (path : string) (ignored : string list) (annot : int) (not_refactor : bool) =
+let command (path : string) (ignored : string list) (annot : int) (not_refactor : bool)
+    (use_get_set : string option) =
   if annot = -1 then (
     let n = ref 0 in
     while annotate path "float array" ignored do
@@ -53,7 +54,7 @@ let command (path : string) (ignored : string list) (annot : int) (not_refactor 
     for _ = 1 to annot do
       ignore (annotate path "float array" ignored)
     done;
-  if not not_refactor then refactor path ignored;
+  if not not_refactor then refactor path use_get_set ignored;
   create_floatarray_library path "floatarray"
 
 (* TODO add option to change the name *)
@@ -72,13 +73,28 @@ let dont_refactor =
   let doc = "Do not refactor." in
   Arg.(value & flag & info [ "dont-refactor" ] ~doc)
 
-type annotate_times = Fixpoint | FixedNb of int
-
 let annotate_times =
   let doc = "Annotate <n> times (-1 by default to loop until a fixpoint is reached)." in
   Arg.(value & opt int (-1) & info [ "a"; "annotate" ] ~docv:"<N>" ~doc)
 
-let refactor_t = Term.(const command $ init_path $ ignored $ annotate_times $ dont_refactor)
+let get_set_op_descr =
+  let doc =
+    "Operator used for get and set functions, of the format \"!()\"(see \
+     https://caml.inria.fr/pub/docs/manual-ocaml/indexops.html)"
+  in
+  Arg.(value & opt string "!()" & info [ "op-descr" ] ~docv:"OP_DESCR" ~doc)
+
+let disable_ghost_get_set =
+  let doc = "Disable indexing operator syntax for get and set functions." in
+  Arg.(value & flag & info [ "disable-op-syntax" ] ~doc)
+
+let use_get_set_t =
+  Term.(
+    const (fun op_descr disable -> if disable then None else Some op_descr)
+    $ get_set_op_descr $ disable_ghost_get_set)
+
+let refactor_t =
+  Term.(const command $ init_path $ ignored $ annotate_times $ dont_refactor $ use_get_set_t)
 
 let info =
   let doc = "Refactor float array to floatarray in the given dune directory." in
